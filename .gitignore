@@ -1,0 +1,30 @@
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.venv/
+venv/
+.env
+
+# Runtime data / user workspace (config, database, vectors, PDFs)
+workspace/
+app_core_bak/
+.update_staging/
+
+# Packaging & Large Binaries
+build/
+dist/
+release/
+*.spec
+*.log
+*.zip
+*.tar.gz
+*.enc
+last_update_error.txt
+
+# Local tools & caches
+.mineru/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

@@ -1,0 +1,145 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="16 16 568 588" width="100%" height="100%">
+  <defs>
+    <!-- 1. 圆润图标底板 (深空蓝背景) -->
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0B192C" />
+      <stop offset="55%" stop-color="#102A45" />
+      <stop offset="100%" stop-color="#07111E" />
+    </linearGradient>
+
+    <!-- 2. 中心 3D 原子球体 -->
+    <radialGradient id="sphereGrad" cx="36%" cy="30%" r="68%">
+      <stop offset="0%" stop-color="#1E3A8A" />
+      <stop offset="55%" stop-color="#0F2557" />
+      <stop offset="88%" stop-color="#0B193D" />
+      <stop offset="100%" stop-color="#2563EB" />
+    </radialGradient>
+
+    <radialGradient id="sphereSpecular" cx="32%" cy="24%" r="42%">
+      <stop offset="0%" stop-color="#60A5FA" stop-opacity="0.30" />
+      <stop offset="100%" stop-color="#60A5FA" stop-opacity="0" />
+    </radialGradient>
+
+    <!-- 3. 数据库三层圆盘 (i 的竖体) -->
+    <linearGradient id="dbCylinderGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#0284C7" />
+      <stop offset="35%" stop-color="#38BDF8" />
+      <stop offset="65%" stop-color="#BAE6FD" />
+      <stop offset="100%" stop-color="#0369A1" />
+    </linearGradient>
+
+    <linearGradient id="dbTopDiscGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#E0F2FE" />
+      <stop offset="100%" stop-color="#38BDF8" />
+    </linearGradient>
+
+    <!-- 4. 原子核/点亮光球 (i 的圆点) -->
+    <radialGradient id="nucleusLightGrad" cx="38%" cy="38%" r="62%">
+      <stop offset="0%" stop-color="#FFFBEB" />
+      <stop offset="45%" stop-color="#FDE047" />
+      <stop offset="85%" stop-color="#F59E0B" />
+      <stop offset="100%" stop-color="#D97706" />
+    </radialGradient>
+
+    <!-- 5. 电子小球 (Electrons) -->
+    <radialGradient id="electronGrad" cx="35%" cy="35%" r="65%">
+      <stop offset="0%" stop-color="#E0F2FE" />
+      <stop offset="45%" stop-color="#00F2FE" />
+      <stop offset="100%" stop-color="#0284C7" />
+    </radialGradient>
+
+    <!-- 仅用于中心原子核与电子的微光滤镜 -->
+    <filter id="coreGlow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="6" result="blur" />
+      <feMerge>
+        <feMergeNode in="blur" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- ==================== 0. Google Material 圆润底板 ==================== -->
+  <rect x="20" y="20" width="560" height="580" rx="126" fill="url(#bgGrad)" stroke="#1E3A8A" stroke-width="4" />
+
+  <!-- ==================== 主体整体放大 1.11 倍，减少四周留白 ==================== -->
+  <g transform="translate(300, 308) scale(1.11) translate(-300, -308)">
+
+    <!-- ==================== 1. 中心原子球体 (圆心 300,315, 半径 160) ==================== -->
+    <circle cx="300" cy="315" r="160" fill="url(#sphereGrad)" stroke="#3B82F6" stroke-width="4.5" />
+    <circle cx="300" cy="315" r="160" fill="url(#sphereSpecular)" />
+
+    <!-- ==================== 2. 中心字母 "i" (上方原子核圆点 + 下方三层数据库圆柱) ==================== -->
+    <g id="ai-center-i">
+      <!-- 2.1 "i" 的竖部：三层圆盘圆柱体数据库 -->
+      <g>
+        <!-- 底层圆盘 -->
+        <path d="M 254 314 L 254 337 A 46 12.5 0 0 0 346 337 L 346 314 Z" fill="url(#dbCylinderGrad)" />
+        <ellipse cx="300" cy="314" rx="46" ry="12.5" fill="url(#dbTopDiscGrad)" stroke="#0B192C" stroke-width="2" />
+
+        <!-- 中层圆盘 -->
+        <path d="M 254 286 L 254 309 A 46 12.5 0 0 0 346 309 L 346 286 Z" fill="url(#dbCylinderGrad)" />
+        <ellipse cx="300" cy="286" rx="46" ry="12.5" fill="url(#dbTopDiscGrad)" stroke="#0B192C" stroke-width="2" />
+
+        <!-- 顶层圆盘 -->
+        <path d="M 254 258 L 254 281 A 46 12.5 0 0 0 346 281 L 346 258 Z" fill="url(#dbCylinderGrad)" />
+        <ellipse cx="300" cy="258" rx="46" ry="12.5" fill="url(#dbTopDiscGrad)" stroke="#E0F2FE" stroke-width="2" />
+      </g>
+
+      <!-- 2.2 "i" 的点：点亮的原子核 -->
+      <g filter="url(#coreGlow)">
+        <circle cx="300" cy="212" r="23" fill="#FDE047" fill-opacity="0.22" />
+        <circle cx="300" cy="212" r="16.5" fill="url(#nucleusLightGrad)" stroke="#FEF08A" stroke-width="2.5" />
+      </g>
+    </g>
+
+    <!-- ==================== 3. 三条纯色三次贝塞尔轨道 (拐弯处饱满厚实，末端柳叶尖平滑收束) ==================== -->
+    <g fill="#22D3EE" stroke="none">
+      
+      <!-- 轨道 1 (右上柳叶尖 -> 右上饱满顶点 -> 正面加粗 A 左腿 -> 左下饱满底点 -> 左下柳叶尖) -->
+      <path d="M 368.5 163.5
+               C 383.0 132.0, 385.0 70.0, 362.0 70.0
+               C 334.0 70.0,  268.0 185.0, 218.0 300.0
+               C 168.0 415.0, 142.0 544.0, 176.0 544.0
+               C 199.0 544.0, 223.0 508.0, 238.5 469.0
+               C 217.0 501.0, 195.0 532.0, 178.0 532.0
+               C 156.0 532.0, 185.0 422.0, 235.0 307.0
+               C 285.0 192.0, 336.0 82.0,  359.0 82.0
+               C 375.0 82.0,  375.0 128.0, 368.5 163.5 Z" />
+
+      <!-- 轨道 2 (左上柳叶尖 -> 左上饱满顶点 -> 正面加粗 A 右腿 -> 右下饱满底点 -> 右下柳叶尖) -->
+      <path d="M 231.5 163.5
+               C 217.0 132.0, 215.0 70.0, 238.0 70.0
+               C 266.0 70.0,  332.0 185.0, 382.0 300.0
+               C 432.0 415.0, 458.0 544.0, 424.0 544.0
+               C 401.0 544.0, 377.0 508.0, 361.5 469.0
+               C 383.0 501.0, 405.0 532.0, 422.0 532.0
+               C 444.0 532.0, 415.0 422.0, 365.0 307.0
+               C 315.0 192.0, 264.0 82.0,  241.0 82.0
+               C 225.0 82.0,  225.0 128.0, 231.5 163.5 Z" />
+
+      <!-- 轨道 3 (左侧柳叶尖 -> 左饱满顶点 -> 正面加粗 A 横杠 -> 右饱满顶点 -> 右侧柳叶尖) -->
+      <path d="M 132.5 292.0
+               C 84.0 298.0,  48.0 304.0,  48.0 324.0
+               C 48.0 352.0,  165.0 372.0, 300.0 372.0
+               C 435.0 372.0, 552.0 352.0, 552.0 324.0
+               C 552.0 304.0, 516.0 298.0, 467.5 292.0
+               C 508.0 302.0, 540.0 309.0, 540.0 325.0
+               C 540.0 344.0, 430.0 354.0, 300.0 354.0
+               C 170.0 354.0, 60.0 344.0,  60.0 325.0
+               C 60.0 309.0,  92.0 302.0,  132.5 292.0 Z" />
+    </g>
+
+    <!-- ==================== 4. 三条轨道顶点上的 3 颗电子小球 ==================== -->
+    <g filter="url(#coreGlow)">
+      <!-- 电子 1：左上轨道顶点 -->
+      <circle cx="236.0" cy="76.0" r="16" fill="url(#electronGrad)" stroke="#E0F2FE" stroke-width="2" />
+
+      <!-- 电子 2：左下轨道底点 -->
+      <circle cx="175.0" cy="538.0" r="16" fill="url(#electronGrad)" stroke="#E0F2FE" stroke-width="2" />
+
+      <!-- 电子 3：右侧水平轨道顶点 -->
+      <circle cx="546.0" cy="324.5" r="16" fill="url(#electronGrad)" stroke="#E0F2FE" stroke-width="2" />
+    </g>
+
+  </g>
+</svg>

@@ -1,0 +1,3 @@
+{"case_id":"EVAL-001","doc_id":"DOC-PAP-REPLACE-ME","categories":["complex_table","formula_dense"],"source_path":"","status":"TODO","notes":"Replace with a real DOC-ID; add expected cards after labeling.","expected_cards":[]}
+{"case_id":"EVAL-002","doc_id":"DOC-PAP-REPLACE-ME","categories":["scanned","cross_page_definition"],"source_path":"","status":"TODO","notes":"Check OCR/page order and definitions split across pages.","expected_cards":[]}
+{"case_id":"EVAL-003","doc_id":"DOC-PAP-REPLACE-ME","categories":["figure_dependent","supplement"],"source_path":"","status":"TODO","notes":"Check whether figure captions or supplementary tables are needed.","expected_cards":[]}

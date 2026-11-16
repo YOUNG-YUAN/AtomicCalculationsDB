@@ -1,0 +1,30 @@
+# Codebase-memory indexing exclusions
+# Keep source, tests, scripts, native launcher, docs and task records.
+# Exclude generated releases, runtime data, model caches and binaries.
+
+.mineru/
+.pytest_cache/
+__pycache__/
+*.py[cod]
+*.pyo
+app_core_bak/
+build/
+dist/
+release/
+workspace/
+.update_staging/
+*.log
+*.zip
+*.sqlite
+*.sqlite-*
+*.db
+*.onnx
+*.gguf
+*.bin
+*.pt
+*.pth
+*.safetensors
+*.pdf
+docs/*.png
+docs/*.jpg
+docs/*.jpeg
