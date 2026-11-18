@@ -248,3 +248,36 @@ def test_dynamic_batch_packer_snaps_to_newlines():
                 # Complete table line: begins and ends with pipe
                 assert line.count("|") >= 2
 
+
+def test_gemini_argon_high_json_parsing():
+    from models.web_ai_bridge import ClipboardBatchService
+
+    raw_json = r"""{"items":[{"item_id":"DOC-PAP-0000-D708BD-60","result":{"skip":true}},{"item_id":"DOC-PAP-0000-D708BD-61","result":{"skip":false,"document_title":"CALCULATIONS
+WITH SPECTROSCOPIC ACCURACY: ENERGIES AND TRANSITION RATES IN THE NITROGEN
+ISOELECTRONIC SEQUENCE FROM Ar XII TO Zn XXIV","document_journal":"The
+Astrophysical Journal Supplement
+Series","document_year":"2016","document_doi":"10.3847/0067-0049/223/1/3","card_type":"CONCLUSION","ion_stage":"Fe
+XX","isoelectronic":"N-like","z_num":"26","method":"CI+MBPT,
+MCDHF/RCI","code_name":"FAC, GRASP2K","physical_process":"Radiative transitions
+(strong transitions with S >= 10^-2, including intercombination E1
+transitions)","premises_and_conditions":"针对类氮 Fe XX 离子的 359 个精细结构能级...","summary_zh":"在类氮 Fe XX 离子的 2307 条强跃迁（线强度 S >= 10^-2）中，本工作的 MBPT 与 MCDHF/RCI 计算的线强度 S 值在 83% 的跃迁中相对偏差不超过 5%。","formulas_latex":["S \geqslant 10^{-2}"],"keywords":["line strength"],"key_evidence_en":"For 83% of these strong transitions, our MBPT and MCDHF/RCI S values agree to within 5%.","conditions":{"target_quantity":"line strength (S)","unit":"a.u.","value":"average relative difference of 2%","uncertainty":"±4%","state_initial":"359 fine-structure levels","state_final":"359 fine-structure levels","transition":"2307 strong transitions with S >= 10^-2","j_parity":"unknown","method_boundary":"Comparison between present MBPT and MCDHF/RCI","convergence":"not_applicable","applicability":"Strong radiative transitions"},"unknown_fields":["j_parity"],"generalized_conjecture":"对于中重高电荷态离子，大规模 CI+MBPT 与扩展活性空间 MCDHF/RCI 计算一致性优于 5%。"}},{"item_id":"DOC-PAP-0000-D708BD-62","result":{"skip":false,"document_title":"CALCULATIONS WITH SPECTROSCOPIC ACCURACY","document_year":"2016","card_type":"CONCLUSION","ion_stage":"Ar XII - Zn XXIV","summary_zh":"对于类氮 Ar XII 至 Zn XXIV n = 2 能级间的 129 条 M1 和 E2 跃迁，NIST ASD 推荐的线强度 S 值相对于本工作 MBPT 计算结果的偏差在 109 条跃迁中小于 10%。","formulas_latex":["2s2p^{4}\;^{2}D_{3/2} \rightarrow 2s2p^{4}\;^{4}P_{1/2}"],"premises_and_conditions":"针对类氮等电子序列 13 个离子...","conditions":{}}}]}"""
+
+    service = ClipboardBatchService()
+    results = service.parse_reply(raw_json)
+    assert len(results) == 3
+    assert results["DOC-PAP-0000-D708BD-60"].skip is True
+
+    res61 = results["DOC-PAP-0000-D708BD-61"]
+    assert res61.skip is False
+    assert len(res61.cards) == 1
+    assert res61.document_year == 2016
+    assert res61.cards[0].card_type == "CONC"
+    # Verify title_zh fallback auto-synthesis when title is omitted by model
+    assert len(res61.cards[0].title_zh) > 0
+    assert "Fe XX" in res61.cards[0].title_zh or "在类氮" in res61.cards[0].title_zh
+
+    res62 = results["DOC-PAP-0000-D708BD-62"]
+    assert res62.skip is False
+    assert len(res62.cards[0].title_zh) > 0
+
+

@@ -119,3 +119,20 @@
 ### 5.4 验证结果
 - 新增针对残损行判定、HTML/Markdown 表格修剪、正文表清洗及分包换行对齐的 5 个单元测试；
 - 全工程单元测试通过总数提升至 **215 passed (100% 通过)**。
+
+---
+
+## 6. Gemini 4 Argon High 回复解析诊断与卡片标题自动生成兜底
+
+### 6.1 用户测试案例与根因剖析
+用户将 `DOC-PAP-0000-D708BD` 的提问包发送给 Google AI Studio 上的 Gemini 4 Argon High，模型返回了高质量提取结果，但在旧版 `v3.0.0` 中无法导入。深度对照发现由以下原因导致：
+1. **单斜杠非法 LaTeX 转义**：Gemini 输出了包含单反斜杠的 LaTeX 宏（如 `\geqslant`、`\;`、`\rightarrow`）。在标准 JSON 语法中，`\g` 和 `\;` 为非法转义序列，导致原生 `json.loads`（即使开启 `strict=False`）直接报 `JSONDecodeError: Invalid \escape`；
+2. **文本内嵌原生硬换行**：在 `document_title` 等字段中包含多行硬换行，在 `strict=True` 下触发 `Invalid control character` 崩溃；
+3. **卡片标题 (`title_zh`) 遗漏**：Gemini 输出了 20 多个字段，却唯独遗漏了卡片标题 `title_zh` / `title`，且将 `document_title` 等嵌套放在了各 item 的 `result` 内部。
+
+### 6.2 修复与兜底保障措施
+1. **多重转义自动修复**：`v3.0.1` 中的 `repair_json_text` 预处理器能自动扫描并安全修补所有的单反斜杠 LaTeX 非法转义符与内嵌换行，实测该 JSON 在 `v3.0.1` 中已能 100% 成功解析；
+2. **卡片标题智能合成兜底**（`app_core/models/web_ai_bridge.py`）：
+   - 当大模型漏输 `title_zh` 与 `title` 时，自动提取 `summary_zh` 中首句物理结论（过滤换行后截取前 45 字符）生成紧凑标题；
+   - 若无总结则以 `{ion_stage} {physical_process} 提炼卡片` 兜底，坚决杜绝空标题卡片入库；
+3. **新增单元测试**：在 `tests/test_v301.py` 中新增 `test_gemini_argon_high_json_parsing` 回归测试，全量测试用例增至 **216 passed (100% 通过)**。

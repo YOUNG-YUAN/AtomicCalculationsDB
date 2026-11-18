@@ -848,9 +848,24 @@ def _extract_json_payload(text: str) -> Any:
 
 def _sanitize_card_dict(raw_card: Mapping[str, Any]) -> dict[str, Any]:
     card = dict(raw_card)
-    # 1. title_zh mapping from title / title_en
+    # 1. title_zh mapping from title / title_en with smart fallback
     if not card.get("title_zh"):
-        card["title_zh"] = str(card.get("title") or card.get("title_en") or "")
+        candidate = str(card.get("title") or card.get("title_en") or "").strip()
+        if not candidate:
+            summary = str(card.get("summary_zh") or card.get("summary") or "").strip()
+            if summary:
+                clean_summary = re.sub(r"\s+", " ", summary).strip()
+                first_sent = re.split(r"[。！？]", clean_summary)[0].strip()
+                if first_sent:
+                    candidate = first_sent[:45] + ("..." if len(first_sent) > 45 else "")
+            if not candidate:
+                ion = str(card.get("ion_stage") or "").strip()
+                proc = str(card.get("physical_process") or "").strip()
+                if ion or proc:
+                    candidate = f"{ion} {proc} 提炼卡片".strip()
+            if not candidate:
+                candidate = "原子物理计算特性提炼卡片"
+        card["title_zh"] = candidate
 
     # 2. card_type normalization to valid CARD_TYPES (STRAT, MODEL, CODE, PITFALL, CONC)
     ctype = str(card.get("card_type") or "").upper().strip()
