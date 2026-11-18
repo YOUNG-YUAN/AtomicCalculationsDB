@@ -313,11 +313,34 @@ class DynamicBatchPacker:
         if not text:
             return [item]
         ratio = max(0.05, min(1.0, capacity / max(1, item.est_input_tokens)))
-        size = max(1, int(len(text) * ratio * 0.9))
-        pieces = [
-            text[index:index + size]
-            for index in range(0, len(text), size)
-        ]
+        target_size = max(1, int(len(text) * ratio * 0.9))
+
+        pieces: list[str] = []
+        start = 0
+        total_len = len(text)
+        while start < total_len:
+            if start + target_size >= total_len:
+                remaining = text[start:].strip()
+                if remaining:
+                    pieces.append(remaining)
+                break
+            candidate = start + target_size
+            # Snap cut position to line break if available within range to preserve table rows and sentences
+            nl_pos = text.rfind("\n", start, candidate + 1)
+            if nl_pos > start:
+                end = nl_pos
+            else:
+                forward_limit = min(total_len, start + int(target_size * 1.25))
+                nl_forward = text.find("\n", candidate, forward_limit)
+                if nl_forward != -1:
+                    end = nl_forward
+                else:
+                    end = candidate
+            piece = text[start:end].strip()
+            if piece:
+                pieces.append(piece)
+            start = end + 1 if end < total_len and text[end:end + 1] == "\n" else end
+
         result = [
             item.with_text(piece, f"#{index + 1}")
             for index, piece in enumerate(pieces)

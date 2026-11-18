@@ -76,3 +76,46 @@
 
 - 新建 `tests/test_v301.py` 测试套件，包含对用户提供的实际 W XXXVIII JSON 数据的端到端解析验证；
 - 全量运行 209 个单元测试，**209 passed in 33.5s (100% 通过)**。
+
+---
+
+## 5. 提问包与上下文表格行截断（同一行截断）根因确认与深度修复
+
+### 5.1 故障真实性深度确认（100% 属实）
+用户反馈在提问包/上下文预览中观察到表格同一行被截断（如末尾出现 `27    M1    1.` 且后续数据列缺失）。
+经反向追查真实环境与文献数据：
+- **文献定位**：该截图真实来源于文献 `wang2016.pdf` (ApJ Suppl 2016, 223:3，对应 Fe XX 跃迁能级与速率数据) 的 Table 7，出现在 `Bundle 58`。
+- **PDF 物理分页原状**：截断位置严格发生在原 PDF 第 30 页最底边缘处。原文该行完整数据应为：
+  `27 | 2s^2 2p^3 ^2P_1/2 - 2s^2 2p^3 ^4S_3/2 | M1 | 1.643E-01 | 1.641E-01 | 1.700E-01 | -0.1 | 3`
+- **MinerU OCR 跨页裁切缺陷**：MinerU 在跨页检测表格边框时，下边缘裁切框穿过了第 30 页最后一行文字，识别出残缺浮点数 `1.` 并将后续 5 个单元格填充为空：
+  `<tr><td>27</td><td>...</td><td>M1</td><td>1.</td><td></td><td></td><td></td><td></td></tr>`
+  第 31 页续表则从下一行 `27 | 2s^2 2p^3 ^2P_3/2 - 2s^2 2p^3 ^2D_5/2` 继续。
+- **问题严重性**：残缺行穿透至 `parsed.md`、`focal_window_markdown` 并进入提问包，导致大模型接收到被腰斩的数据（`1.` 被误当为数值），干扰物理逻辑并可能引发大模型回复拒识。
+
+### 5.2 潜在引发截断的双重成因分析
+1. **成因 A（主要根源：OCR 页面边缘残缺行穿透）**：
+   原有流程对 HTML 表格与 Markdown 表格缺乏对“分页裁切残损行”的防御性校验，盲目将含 `1.` 和空列的残缺行转为管道表格；
+2. **成因 B（次要隐患：`DynamicBatchPacker` 的定长硬字符切分）**：
+   在 `batch_packer.py` 的 `_split_by_characters` 中，原实现使用固定字符步长 `text[index:index + size]` 进行切片。若遇到超长单行或表格文本时，会直接在任意字符偏移处“腰斩”Markdown 表格行，造成同一行切断。
+
+### 5.3 四层防御体系与解决方案落地
+
+#### 1. 残缺表格行识别器 (`app_core/parser/html_table.py`)
+实现 `is_truncated_table_row(row, max_cols)` 与 `is_truncated_markdown_table_line(line, expected_cols)`：
+- 精确检测浮点数残损格式（如 `^[+-]?\d+\.$` 匹配 `1.`，`^[+-]?\d+(?:\.\d*)?[eE][+-]?$` 匹配 `1.2E+` 等非首列残缺数值）；
+- 检测跨单元格未闭合的 LaTeX 数学标记（`count('$') % 2 != 0`）；
+- 检测末尾严重列丢失（丢失 $\ge 50\%$ 列）且以断裂标点结尾的残损行。
+
+#### 2. HTML 转 Markdown 自动剪除 (`html_table.py`)
+在 `_grid()` 和 `html_table_to_markdown()` 中，生成网格与单元格映射后，自动检测并剪除底部被跨页裁切的残损行，保证 `parsed.md` 从源头不被污染。
+
+#### 3. 表格压缩与上下文拼接双重净化 (`table_compressor.py` & `context_bundler.py`)
+- 在 `compress_markdown_table()` 中增加对 Markdown 表格末尾残缺行的修剪；
+- 在 `context_bundler.py` 生成 `focal_window_markdown` 时，调用 `sanitize_markdown_table_text(window)`，即使面对已解析的旧文献，也能在组装 Bundle 时自动剔除残损行。
+
+#### 4. `DynamicBatchPacker` 换行符对齐切分 (`batch_packer.py`)
+全面重构 `_split_by_characters`：切分时在切片候选位置自动向前回溯查找 `\n`；若无则在合理容差范围内向后搜索 `\n`。保证分块永远在完整行边界处换行，彻底消除 Markdown 表格同一行被腰斩的技术隐患。
+
+### 5.4 验证结果
+- 新增针对残损行判定、HTML/Markdown 表格修剪、正文表清洗及分包换行对齐的 5 个单元测试；
+- 全工程单元测试通过总数提升至 **215 passed (100% 通过)**。

@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 
 from parser.conclusion_tagger import tag_text
 from parser.four_channel_radar import RadarHit, RadarResult
+from parser.html_table import sanitize_markdown_table_text
 from parser.pdf_to_markdown import ParsedDocument, Section
 from parser.preamble_extractor import extract_document_preamble
 from parser.table_compressor import compress_markdown_table
@@ -115,6 +116,7 @@ class ContextBundler:
             focal_sentence = hit.sentence or self._first_sentence(paragraph)
             focal = self._highlight(paragraph, focal_sentence, hit)
             window = "\n\n".join(part for part in (previous, focal, following) if part)
+            window = sanitize_markdown_table_text(window)
             paragraph_blocks = getattr(section, "paragraph_blocks", [])
             source_block = (
                 paragraph_blocks[paragraph_index]

@@ -12,6 +12,11 @@ from __future__ import annotations
 
 import re
 
+try:
+    from parser.html_table import is_truncated_table_row
+except ImportError:
+    from app_core.parser.html_table import is_truncated_table_row
+
 _COMMON_UNITS = [
     r"eV",
     r"keV",
@@ -102,6 +107,10 @@ def compress_markdown_table(table_markdown: str) -> str:
     num_cols = len(header)
     if num_cols == 0:
         return table_markdown
+
+    # Prune trailing rows truncated by OCR page boundary crop or incomplete split
+    while data_rows and is_truncated_table_row(data_rows[-1], num_cols):
+        data_rows.pop()
 
     # Ensure consistent column count
     for r in data_rows:

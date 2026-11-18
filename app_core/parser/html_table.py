@@ -16,6 +16,93 @@ from typing import Any
 
 from bs4 import BeautifulSoup
 
+_INCOMPLETE_NUMERIC_RE = re.compile(
+    r"^[+-]?\d+\.$|^[+-]?\d+(?:\.\d*)?[eE][+-]?$"
+)
+
+
+def is_truncated_table_row(row: list[str], max_cols: int | None = None) -> bool:
+    """Detect whether a table row is truncated/incomplete (e.g. from OCR page edge crop)."""
+    if not row:
+        return False
+    populated = [(i, c.strip()) for i, c in enumerate(row) if c and c.strip()]
+    if not populated:
+        return False
+    last_idx, last_val = populated[-1]
+    cols = max_cols if max_cols is not None else len(row)
+
+    # 1. Incomplete numeric token in non-first column (e.g. '1.', '1.2E+', '-3.')
+    if last_idx > 0 and _INCOMPLETE_NUMERIC_RE.match(last_val):
+        return True
+
+    # 2. Unclosed math delimiters with trailing empty cells
+    unescaped = re.sub(r"\\\$", "", last_val)
+    if unescaped.count("$") % 2 != 0 and last_idx < cols - 1:
+        return True
+
+    # 3. Severe column loss (>= 50% empty cells) with cut-off punctuation
+    if cols >= 4 and len(populated) <= cols // 2:
+        if last_val.endswith((".", "-", "...", "…", ",")) and not (
+            last_idx == 0 and re.match(r"^\d+\.$", last_val)
+        ):
+            return True
+
+    return False
+
+
+def is_truncated_markdown_table_line(
+    line: str, expected_cols: int | None = None
+) -> bool:
+    """Check if a single pipe table markdown line represents a truncated row."""
+    stripped = line.strip()
+    if not stripped.startswith("|"):
+        return False
+    inner = stripped.strip("|")
+    cells = [c.strip() for c in inner.split("|")]
+    return is_truncated_table_row(cells, expected_cols or len(cells))
+
+
+def sanitize_markdown_table_text(text: str) -> str:
+    """Sanitize all markdown pipe tables within a text block, stripping truncated boundary rows."""
+    if not text or "|" not in text:
+        return text
+    lines = text.splitlines(keepends=True)
+    out_lines: list[str] = []
+    table_buffer: list[str] = []
+
+    def flush_table():
+        nonlocal table_buffer
+        if not table_buffer:
+            return
+        expected_cols = None
+        for tline in table_buffer:
+            s = tline.strip()
+            if s.startswith("|") and not all(c in "| -:" for c in s):
+                cells = [c.strip() for c in s.strip("|").split("|")]
+                expected_cols = len(cells)
+                break
+        while table_buffer:
+            last_line = table_buffer[-1].strip()
+            if last_line.startswith("|") and is_truncated_markdown_table_line(
+                last_line, expected_cols
+            ):
+                table_buffer.pop()
+            else:
+                break
+        out_lines.extend(table_buffer)
+        table_buffer = []
+
+    for line in lines:
+        if line.strip().startswith("|"):
+            table_buffer.append(line)
+        else:
+            if table_buffer:
+                flush_table()
+            out_lines.append(line)
+    if table_buffer:
+        flush_table()
+    return "".join(out_lines)
+
 
 def _cell_text(cell: Any) -> str:
     return re.sub(r"\s+", " ", cell.get_text(" ", strip=True)).strip()
@@ -57,6 +144,11 @@ def _grid(table: Any) -> tuple[list[list[str]], list[list[dict[str, Any]]]]:
         [occupied.get((row, col), "") for col in range(max_col)]
         for row in range(len(rows))
     ]
+    # Prune trailing rows that were truncated by OCR page boundary crop
+    while grid and is_truncated_table_row(grid[-1], max_col):
+        grid.pop()
+        if cells and len(cells) > len(grid):
+            cells.pop()
     return grid, cells
 
 
@@ -137,6 +229,9 @@ def html_table_to_markdown(html: str) -> str:
 __all__ = [
     "html_table_cells",
     "html_table_to_markdown",
+    "is_truncated_markdown_table_line",
+    "is_truncated_table_row",
     "markdown_table_cells",
+    "sanitize_markdown_table_text",
     "table_header_rows",
 ]
