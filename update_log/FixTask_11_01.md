@@ -197,3 +197,6 @@
 > - **Patch 补丁包**（`AtomicCalculationDB_Patch_vX.Y.Z.zip`，~550 KB）：包含最新 `app_core` 业务代码与 `version.json`，供用户在界面“设置”中一键导入或热替换；
 > - **Lite 免安装包**（`AtomicCalculationDB_Lite_vX.Y.Z.zip`，~280 MB）：包含独立运行的 Python/Qt 环境、全新 `app_core` 与干净工作区骨架（不含 1.4 GB 本地模型）；
 > - **Full 完整离线包**（`AtomicCalculationDB_Full_vX.Y.Z.zip`，~1.7 GB）：包含 Lite 的全部内容，并内置 1.4 GB 的离线 ONNX 嵌入与重排序模型。
+>
+> **重要权限边界（严禁越权）**：
+> 打包产物的 Release 发布与远端上传**必须由用户本人手动执行**。AI 仅负责在本地 `release/` 目录下完成合规打包，**绝不能替代用户发布 GitHub Release 或上传产物**。
