@@ -1060,13 +1060,15 @@ class LibraryView(QWidget):
         return ids
 
     def _set_reprocess_busy(self, busy: bool) -> None:
-        for button in (
-            self.local_clean_button,
-            self.step3_api_button,
-            self.step3_semi_button,
-            self.step5_deep_button,
-        ):
-            button.setEnabled(not busy)
+        buttons = [
+            getattr(self, "local_clean_button", None),
+            getattr(self, "step3_api_button", None),
+            getattr(self, "step4_audit_button", None),
+            getattr(self, "step5_deep_button", None),
+        ]
+        for button in buttons:
+            if button is not None:
+                button.setEnabled(not busy)
         self.stop_reprocess_button.setVisible(
             busy and self._reprocess_mode in ("incremental", "force")
         )
@@ -1300,7 +1302,7 @@ class LibraryView(QWidget):
                 return
             rollback_pipeline_from_step(self.db, self.workspace, doc_id, 1, qdrant=qdrant)
             self.refresh_visible_pipeline_statuses([doc_id])
-            self._run_reprocess("force")
+            self._run_reprocess("force", target_doc_ids=[doc_id], skip_confirmation=True)
 
         elif step == 2:
             reply = QMessageBox.question(
@@ -1314,7 +1316,7 @@ class LibraryView(QWidget):
                 return
             rollback_pipeline_from_step(self.db, self.workspace, doc_id, 2, qdrant=qdrant)
             self.refresh_visible_pipeline_statuses([doc_id])
-            self._run_reprocess("force")
+            self._run_reprocess("force", target_doc_ids=[doc_id], skip_confirmation=True)
 
         elif step == 3:
             choice = QMessageBox.question(

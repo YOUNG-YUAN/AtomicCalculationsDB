@@ -62,11 +62,29 @@
 
 ---
 
-## 4. 验证与交付
+## 4. 右键菜单“从指定步骤开始”AttributeError 修复
+
+### 4.1 诊断与根因
+用户在文库列表中右键点击文献并选择“▶ 从第 ① 步开始：重新提取文本”或“▶ 从第 ② 步开始：重新提取关键信息”时，触发弹窗报错：
+```
+'LibraryView' object has no attribute 'step3_semi_button'
+```
+排查原因：
+- 在重处理状态切换函数 `LibraryView._set_reprocess_busy` 中，历史遗留代码尝试禁用 `self.step3_semi_button`；
+- 该按钮在早期的“统一第 ③ 步入口”改造中已被整合为单一的 `step3_api_button`，变量未在 `__init__` 中定义，导致右键触发重处理流程时发生 `AttributeError` 阻断。
+- 另外，右键菜单中调用 `_run_reprocess("force")` 时未显式传入当前右键的 `target_doc_ids=[doc_id]`，且未跳过二次确认弹窗（前一步弹窗已确认）。
+
+### 4.2 优化修复
+1. 重构 `LibraryView._set_reprocess_busy`，使用安全安全的 `getattr` 动态遍历按钮列表，并将不存在的 `step3_semi_button` 替换为现存的 `step4_audit_button`；
+2. 在右键菜单第 ①/② 步处理逻辑中，显式传入当前文献 `target_doc_ids=[doc_id], skip_confirmation=True`，确保仅重跑目标文献且不重复弹窗。
+
+---
+
+## 5. 验证与交付
 
 1. **测试套件**：
-   - 新增 `tests/test_v304.py`，完整覆盖精准匹配、单篇子集匹配、部分选中匹配、交集匹配与无参数匹配；
-   - 运行全量测试套件，**232 个测试全部通过（100% Passed）**。
+   - 新增 `tests/test_v304.py`，完整覆盖精准匹配、单篇子集匹配、部分选中匹配、交集匹配、无参数匹配、物理理论模型名称过滤，以及 `_set_reprocess_busy` 源码安全断言；
+   - 运行全量测试套件，**234 个测试全部通过（100% Passed）**。
 2. **打包与部署**：
    - 同步 `app_core` 至 `C:\Normal Program Files\AtomicCalculationDB\` 及 `dist\`；
    - 更新本地构建包 `release/AtomicCalculationDB_Patch_v3.0.4.zip` 与 `release/AtomicCalculationDB_Lite_v3.0.4.zip`。

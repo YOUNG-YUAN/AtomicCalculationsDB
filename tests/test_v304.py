@@ -66,3 +66,41 @@ def test_find_unfinished_run_hierarchical_matching(tmp_path):
     found_empty = find_unfinished_run(ws, [])
     assert found_empty is not None
     assert found_empty["run_id"] == "semi_20261118_010000_111111"
+
+
+def test_get_card_model_name_ignores_physics_model():
+    from ui.dialogs import get_card_model_name
+
+    # Card has physics theory model 'Born-Oppenheimer' in structured
+    card = {
+        "knw_id": "KNW-01",
+        "structured": {
+            "model": "Born-Oppenheimer",
+            "table": "Table 1",
+        },
+        "structured_details_json": json.dumps({"model": "Born-Oppenheimer"}),
+    }
+    # But provenance has real AI model
+    prov = {
+        "fast_llm": {
+            "model": "deepseek-v4.1-flash-1017",
+            "provider": "api",
+        }
+    }
+    # It MUST return the AI model from provenance, not the physics model!
+    resolved = get_card_model_name(card, prov)
+    assert resolved == "deepseek-v4.1-flash-1017"
+
+    # Even without provenance, it should not return physics model
+    resolved_no_prov = get_card_model_name(card, None, default_model="GPT-6.1 Sol Ultra")
+    assert resolved_no_prov == "GPT-6.1 Sol Ultra"
+
+
+def test_library_view_set_reprocess_busy():
+    from ui.views.library import LibraryView
+
+    # Verify _set_reprocess_busy does not reference 'step3_semi_button'
+    import inspect
+    source = inspect.getsource(LibraryView._set_reprocess_busy)
+    assert "step3_semi_button" not in source
+
