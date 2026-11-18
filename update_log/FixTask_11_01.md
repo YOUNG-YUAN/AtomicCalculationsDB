@@ -180,3 +180,20 @@
 ### 7.3 验证结果
 - 在 `tests/test_v301.py` 中补充 `test_sanitize_z_num_and_overflow_protection` 与 `test_repair_inner_quotes_with_inner_colon_prose` 两个测试；
 - 全工程单元测试通过总数提升至 **218 passed (100% 通过)**。
+
+---
+
+## 8. 版本迭代发布与本地打包规范准则（永久生效规则）
+
+依据项目管理要求，后续版本迭代严格遵循三级发布与打包策略：
+
+| 迭代级别 | 版本示例 | README / 文档变更 | GitHub Release | 打包生成产物 | 远端 Git |
+| :--- | :--- | :---: | :---: | :--- | :---: |
+| **X 版本（主版本迭代）** | `v3.0.0` $\rightarrow$ `v4.0.0` | **修改 README** | **发布 Release** | **Patch + Lite + Full** | **提交并推送** |
+| **Y 版本（次版本迭代）** | `v3.0.0` $\rightarrow$ `v3.1.0` | **不修改 README** | **发布 Release** | **Patch + Lite + Full** | **提交并推送** |
+| **Z 版本（补丁/修复）** | `v3.0.0` $\rightarrow$ `v3.0.1` | **不修改 README** | **不发布 Release** | **Patch + Lite**（本地生成） | **提交并推送** |
+
+> **产物说明**：
+> - **Patch 补丁包**（`AtomicCalculationDB_Patch_vX.Y.Z.zip`，~550 KB）：包含最新 `app_core` 业务代码与 `version.json`，供用户在界面“设置”中一键导入或热替换；
+> - **Lite 免安装包**（`AtomicCalculationDB_Lite_vX.Y.Z.zip`，~280 MB）：包含独立运行的 Python/Qt 环境、全新 `app_core` 与干净工作区骨架（不含 1.4 GB 本地模型）；
+> - **Full 完整离线包**（`AtomicCalculationDB_Full_vX.Y.Z.zip`，~1.7 GB）：包含 Lite 的全部内容，并内置 1.4 GB 的离线 ONNX 嵌入与重排序模型。
