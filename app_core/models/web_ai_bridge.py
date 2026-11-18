@@ -837,7 +837,10 @@ def _extract_json_payload(text: str) -> Any:
         if isinstance(value, (dict, list)):
             candidates.append(value)
     for value in candidates:
-        if isinstance(value, dict) and ("items" in value or "cards" in value):
+        if isinstance(value, dict) and "items" in value:
+            return value
+    for value in candidates:
+        if isinstance(value, dict) and "cards" in value:
             return value
     for value in candidates:
         if isinstance(value, list) and (not value or any(isinstance(x, (dict, list)) for x in value)):

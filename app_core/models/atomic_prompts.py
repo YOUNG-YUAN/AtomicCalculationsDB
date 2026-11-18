@@ -410,6 +410,8 @@ def repair_json_text(text: str) -> str:
         return text
     except Exception:
         pass
+    # Strip stray unquoted tokens/words before property keys outside strings (e.g. `Semi "generalized_conjecture":`)
+    text = re.sub(r'([,{]\s*)[a-zA-Z_][a-zA-Z0-9_\-\.]*[:\s]+\s*(\"[a-zA-Z0-9_]+\"\s*:)', r'\1\2', text)
     text = repair_inner_quotes(text)
     result: list[str] = []
     i = 0

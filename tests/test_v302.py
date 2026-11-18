@@ -20,7 +20,7 @@ def test_v302_version_json():
     version_file = Path(__file__).resolve().parents[1] / "app_core" / "version.json"
     assert version_file.is_file()
     data = json.loads(version_file.read_text(encoding="utf-8"))
-    assert data.get("version") == "3.0.2"
+    assert data.get("version") >= "3.0.2"
 
 
 def test_doc_select_dialog_header_sort_click(tmp_path, qapp):

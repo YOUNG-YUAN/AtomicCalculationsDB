@@ -382,7 +382,8 @@ def import_reply(
                 current_batch=batch,
             )
         sample_exp = ", ".join(sorted(expected)[:3])
-        sample_rec = ", ".join(sorted(results)[:3])
+        valid_rec = [k for k in sorted(results) if k.strip()]
+        sample_rec = ", ".join(valid_rec[:3]) if valid_rec else "（未识别出有效片段 ID）"
         raise SemiAutoError(
             f"【提问包不匹配】\n"
             f"回复中包含的片段（{sample_rec} 等）与当前提问包要求的片段（{sample_exp} 等）不符，请确认是否粘贴错了其他文献的提问包回复。"
