@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QTextBrowser,
     QTextEdit,
     QVBoxLayout,
@@ -130,6 +131,75 @@ def _header_row(chips: list[QWidget], close_text: str = "关闭") -> tuple[QHBox
     close_button.setObjectName("Pill")
     row.addWidget(close_button)
     return row, close_button
+
+
+def get_card_model_name(
+    card: dict[str, Any],
+    card_provenance: dict[str, Any] | None = None,
+    default_model: str = "",
+) -> str:
+    """Extract human-readable model name that produced this knowledge card."""
+    # 1. From structured details first (e.g. extractor_model stamped by semi-auto / importer)
+    struct = card.get("structured")
+    if not isinstance(struct, dict) and card.get("structured_details_json"):
+        try:
+            struct = json.loads(card["structured_details_json"])
+        except Exception:
+            struct = {}
+    if isinstance(struct, dict):
+        for k in ("extractor_model", "model_name", "agent_model", "model"):
+            v = str(struct.get(k) or "").strip()
+            if v and v not in ("用户手动/外部网页 AI", "外部网页 AI", "未知"):
+                return v
+
+    # 2. From card_model_provenance records
+    if card_provenance:
+        is_l1 = (
+            str(card.get("card_level") or "").upper() == "L1"
+            or str(card.get("card_type") or "").upper() == "MASTER"
+        )
+        preferred_roles = (
+            ("slow_llm", "fast_llm", "extraction")
+            if is_l1
+            else ("fast_llm", "slow_llm", "extraction")
+        )
+        for role in preferred_roles:
+            info = card_provenance.get(role)
+            if isinstance(info, dict):
+                m = str(info.get("web_model") or info.get("model") or "").strip()
+                if m and m not in ("用户手动/外部网页 AI", "外部网页 AI", "未知"):
+                    return m
+                node_n = str(info.get("node_name") or "").strip()
+                if node_n and node_n not in (
+                    "网页版 AI 手动",
+                    "快速提取 API",
+                    "深度归纳 API",
+                    "AI 深度归纳",
+                ):
+                    return node_n
+                if m:
+                    return m
+
+        # Fallback to any non-embedding role in provenance
+        for role, info in card_provenance.items():
+            if role in ("embedding", "reranker"):
+                continue
+            if isinstance(info, dict):
+                m = str(info.get("web_model") or info.get("model") or "").strip()
+                if m:
+                    return m
+
+    # 3. Fallback to default_model (e.g. from document's semi_auto manifest)
+    if default_model and default_model.strip():
+        return default_model.strip()
+
+    # 4. From card top-level fields
+    for k in ("extractor_model", "agent_model", "model", "model_name"):
+        v = str(card.get(k) or "").strip()
+        if v:
+            return v
+
+    return ""
 
 
 class KnowledgeCardEditDialog(QDialog):
@@ -862,17 +932,56 @@ class DocumentDetailDialog(QDialog):
             empty.setObjectName("Muted")
             empty.setWordWrap(True)
             self.related_layout.addWidget(empty)
+        card_ids = [str(c.get("knw_id") or "") for c in related if c.get("knw_id")]
+        provenance_map = (
+            self.db.provenance_for_cards(card_ids)
+            if hasattr(self.db, "provenance_for_cards") and card_ids
+            else {}
+        )
+        doc_semi_model = ""
+        if self.doc and self.workspace:
+            try:
+                from models.semi_auto import find_unfinished_run
+                manifest = find_unfinished_run(self.workspace, [str(self.doc["doc_id"])])
+                if manifest and manifest.get("agent_model"):
+                    doc_semi_model = str(manifest["agent_model"]).strip()
+            except Exception:
+                pass
+
         for card in related:
+            kid = str(card.get("knw_id") or "")
+            prov = provenance_map.get(kid, {})
+            model_name = get_card_model_name(card, prov, default_model=doc_semi_model)
+
+            card_row = QHBoxLayout()
+            card_row.setContentsMargins(0, 0, 0, 0)
+            card_row.setSpacing(8)
+
             button = QPushButton(f"{card['knw_id']}  ·  {card.get('title_zh', '')}")
             button.setObjectName("Ghost")
             button.setCursor(Qt.PointingHandCursor)
             button.setStyleSheet("text-align: left; padding: 7px 9px;")
             button.clicked.connect(
-                lambda _checked=False, kid=card["knw_id"]: KnowledgeDetailDialog(
-                    self.db, self.workspace, kid, parent=self
+                lambda _checked=False, target_kid=kid: KnowledgeDetailDialog(
+                    self.db, self.workspace, target_kid, parent=self
                 ).exec()
             )
-            self.related_layout.addWidget(button)
+            card_row.addWidget(button, 1)
+
+            if model_name:
+                badge = QPushButton(f"🤖 {model_name}")
+                badge.setObjectName("ModelBadge")
+                badge.setCursor(Qt.PointingHandCursor)
+                badge.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+                badge.setToolTip(f"该卡片由模型 [{model_name}] 提炼生成（点击查看卡片详情）")
+                badge.clicked.connect(
+                    lambda _checked=False, target_kid=kid: KnowledgeDetailDialog(
+                        self.db, self.workspace, target_kid, parent=self
+                    ).exec()
+                )
+                card_row.addWidget(badge, 0, Qt.AlignVCenter)
+
+            self.related_layout.addLayout(card_row)
         self._refresh_stepper()
 
     def _refresh_stepper(self) -> None:

@@ -269,3 +269,54 @@
 - 全工程 **220 个测试全部通过 (100% passed)**；
 - 代码已同步更新至 `C:\Normal Program Files\AtomicCalculationDB\` 及 `dist\`；
 - 按照 Z 版本补丁规范，本地生成最新版 `release/AtomicCalculationDB_Patch_v3.0.1.zip` 与 `release/AtomicCalculationDB_Lite_v3.0.1.zip`。
+
+---
+
+## 11. 文献详情弹窗关联知识卡右侧显示提取模型徽标（v3.0.1）
+
+### 11.1 用户诉求与场景背景
+> “希望在文献的详细介绍页面里，关联知识卡的右边显示是什么模型给出的”
+
+在文献详细介绍弹窗（`DocumentDetailDialog`）底部的“关联知识卡”列表中，原有设计仅展示一个按钮，内容为 `[卡片ID] · [卡片中文标题]`。用户在查看由半自动或自动化工作流产出的知识卡时，无法一眼看出某张卡片是由哪个模型（如 `Gemini 4 Argon High`、`GPT-6.1 Sol Ultra`、`deepseek-v4.1-flash-1017` 等）解析与提炼生成的。
+
+### 11.2 技术方案与架构设计
+1. **多级鲁棒模型归属解析引擎（`get_card_model_name`）**：
+   - 在 `app_core/ui/dialogs.py` 中封装专门的模型名称解析逻辑：
+     - **第一优先级（溯源表 `card_model_provenance`）**：针对 L2 提炼卡优先读取 `role == "fast_llm"` 记录，L1 主卡读取 `role == "slow_llm"` 记录，提取 `web_model` 或 `model` 或 `node_name`；
+     - **第二优先级（结构化扩展字段 `structured`）**：优先提取 `extractor_model`、`model_name`、`agent_model`、`model` 等；
+     - **第三优先级（当前文献正在进行的半自动提问任务清单）**：若属于当前正在处理的批次，支持回退至清单中的 `manifest["agent_model"]`；
+     - **第四优先级（卡片顶层字段）**：读取 `card.get("extractor_model")`、`card.get("model")`；
+     - **最终兜底**：若全部未命中，返回预设的默认模型或空字符串。
+2. **UI 布局重构（双按键横向栅格）**：
+   - 在 `DocumentDetailDialog._refresh_related_cards` 中，重构行布局为 `QHBoxLayout`：
+     - **左侧按钮（知识卡标题）**：设置 `stretch=1`，展示 `f"{card['knw_id']} · {card.get('title_zh', '')}"`；
+     - **右侧徽标（模型标签）**：创建 `QPushButton` 并设置 `objectName="ModelBadge"`、`setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)`，显示文本为 `🤖 {model_name}`（若未识别出模型则显示 `🤖 未记录`）；
+     - **智能提示（Tooltip）**：悬停时显示 `该卡片由模型 [{model_name}] 提炼生成（点击查看卡片详情）`；
+     - **交互闭环**：左侧标题按钮和右侧模型徽标均绑定卡片详情点击事件，点击即可弹出 `KnowledgeDetailDialog` 查看完整证据链。
+3. **视觉设计规范（M3 Design Badge）**：
+   - 在 `app_core/ui/m3_theme.py` 的 `_EXTRA_QSS` 中注入精致的徽标样式：
+     ```css
+     QPushButton#ModelBadge {
+         background: #F1F5F9;
+         color: #475569;
+         border: 1px solid #CBD5E1;
+         border-radius: 12px;
+         padding: 3px 10px;
+         font-size: 11px;
+         font-weight: 500;
+     }
+     QPushButton#ModelBadge:hover {
+         background: #E2E8F0;
+         color: #1E293B;
+         border-color: #94A3B8;
+     }
+     ```
+   - 保证在浅色与深色主题下对比清晰，胶囊状圆角与整体 Modern Design 语言一致。
+
+### 11.3 自动化验证与交付
+- 在 `tests/test_v301.py` 中新增 2 组测试用例：
+  1. `test_get_card_model_name_resolution`：严格覆盖从 `card_model_provenance`、`structured.extractor_model` 和默认参数三种途径解析模型名称的准确性；
+  2. `test_document_detail_dialog_shows_model_badge`：创建真实文档与关联知识卡并在数据库记录溯源模型 `Gemini 4 Argon High`，实例化 `DocumentDetailDialog`，断言成功在关联卡片行中生成带有 `ModelBadge` 标识且内容包含 `Gemini 4 Argon High` 的徽标。
+- 全套测试集 **222 个测试用例 100% 全部通过**；
+- 核心代码已同步至本地安装目录（`C:\Normal Program Files\AtomicCalculationDB\`）及 `dist\`；
+- 本地生成最新 `release/AtomicCalculationDB_Patch_v3.0.1.zip` 及 `release/AtomicCalculationDB_Lite_v3.0.1.zip`。

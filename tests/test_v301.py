@@ -444,6 +444,58 @@ def test_library_refresh_visible_pipeline_statuses_in_place_preserves_order(tmp_
     lib.close()
 
 
+def test_get_card_model_name_resolution():
+    from app_core.ui.dialogs import get_card_model_name
+
+    # 1. From provenance fast_llm
+    card = {"knw_id": "KNW-01", "card_level": "L2"}
+    prov = {"fast_llm": {"model": "Gemini 4 Argon High"}}
+    assert get_card_model_name(card, prov) == "Gemini 4 Argon High"
+
+    # 2. From structured extractor_model
+    card2 = {"knw_id": "KNW-02", "structured": {"extractor_model": "GPT-6.1 Sol Ultra"}}
+    assert get_card_model_name(card2, None) == "GPT-6.1 Sol Ultra"
+
+    # 3. From default_model fallback
+    card3 = {"knw_id": "KNW-03"}
+    assert get_card_model_name(card3, None, default_model="Claude 3.5 Sonnet") == "Claude 3.5 Sonnet"
+
+
+def test_document_detail_dialog_shows_model_badge(tmp_path, qapp):
+    from unittest.mock import MagicMock
+    from db.sqlite_manager import SQLiteManager
+    from app_core.ui.dialogs import DocumentDetailDialog
+    from PySide6.QtWidgets import QPushButton
+
+    db = SQLiteManager(tmp_path)
+    doc_id = db.upsert_document({"doc_id": "DOC-PAP-2026-000088", "title": "Test Element Paper", "pub_year": 2026})
+    knw_id = db.upsert_knowledge_card({
+        "knw_id": "KNW-STRAT-2026-000088",
+        "card_level": "L2",
+        "card_type": "STRAT",
+        "title_zh": "测试策略卡片",
+        "summary_zh": "这是测试总结",
+        "supporting_doc_ids": [doc_id],
+    })
+    db.set_card_provenance(knw_id, "fast_llm", {"model": "Gemini 4 Argon High"})
+
+    dialog = DocumentDetailDialog(db, tmp_path, doc_id)
+    # Check related layout has the model badge
+    found_badges = []
+    for i in range(dialog.related_layout.count()):
+        item = dialog.related_layout.itemAt(i)
+        if item.layout():
+            row = item.layout()
+            for j in range(row.count()):
+                w = row.itemAt(j).widget()
+                if isinstance(w, QPushButton) and w.objectName() == "ModelBadge":
+                    found_badges.append(w.text())
+
+    assert len(found_badges) == 1
+    assert "Gemini 4 Argon High" in found_badges[0]
+    dialog.close()
+
+
 
 
 

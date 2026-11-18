@@ -62,6 +62,20 @@ QPushButton#IntentChip {
     background: #EFF3F8; border: none; border-radius: 12px;
     padding: 4px 10px; font-size: 10px; color: #3B4657;
 }
+QPushButton#ModelBadge {
+    background-color: #F1F5F9;
+    color: #475569;
+    border: 1px solid #CBD5E1;
+    border-radius: 12px;
+    padding: 3px 10px;
+    font-size: 11px;
+    font-weight: 500;
+}
+QPushButton#ModelBadge:hover {
+    background-color: #E2E8F0;
+    color: #1E293B;
+    border-color: #94A3B8;
+}
 QFrame#Drawer {
     background: #FFFFFF;
     border-left: 1px solid #E3E8F0;
