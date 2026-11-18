@@ -74,6 +74,27 @@ def _format_authors_short(authors_val: Any) -> str:
     return str(authors_val).strip() or "—"
 
 
+_DOC_SELECT_SORT_FIELDS = {
+    0: "doc_id",
+    1: "title",
+    2: "doc_type",
+    3: "pub_year",
+    4: "journal",
+    5: "authors",
+    6: "download_status",
+}
+
+_DOC_SELECT_BASE_HEADER_LABELS = [
+    "DOC-ID",
+    "标题",
+    "类型",
+    "年份",
+    "期刊",
+    "作者",
+    "下载 / 解析状态",
+]
+
+
 class DocSelectDialog(QDialog):
     """Document selection dialog supporting hierarchical collections tree, point-click, box-select, and range-select."""
 
@@ -90,6 +111,8 @@ class DocSelectDialog(QDialog):
         self._all_docs: list[dict[str, Any]] = []
         self._filtered_docs: list[dict[str, Any]] = []
         self._updating_table: bool = False
+        self.sort_column_index: int | None = None
+        self.sort_order: str = "DESC"
         self.total_doc_count = self.db.count_documents() if self.db else 0
 
         self.setWindowTitle("📋 选择维护文献 - 我的文库")
@@ -175,15 +198,7 @@ class DocSelectDialog(QDialog):
 
         # Table
         self.table = QTableWidget(0, 7)
-        self.table.setHorizontalHeaderLabels([
-            "DOC-ID",
-            "标题",
-            "类型",
-            "年份",
-            "期刊",
-            "作者",
-            "下载 / 解析状态",
-        ])
+        self.table.setHorizontalHeaderLabels(list(_DOC_SELECT_BASE_HEADER_LABELS))
         self.table.verticalHeader().setVisible(False)
         self.table.setAlternatingRowColors(True)
         self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)
@@ -196,6 +211,10 @@ class DocSelectDialog(QDialog):
         self.table.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
 
         header_view = self.table.horizontalHeader()
+        header_view.setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        header_view.sectionClicked.connect(self._on_header_section_clicked)
+        header_view.setSectionsClickable(True)
+        header_view.setCursor(Qt.PointingHandCursor)
         header_view.setSectionResizeMode(QHeaderView.Interactive)
         header_view.setSectionsMovable(False)
 
@@ -357,20 +376,97 @@ class DocSelectDialog(QDialog):
         menu.addAction("📁 新建顶层分类...", lambda: self._create_new_collection_prompt())
         menu.exec(self.collections_tree.viewport().mapToGlobal(pos))
 
+    # ------------------------------------------------------------- sorting
+    def _on_header_section_clicked(self, logical_index: int) -> None:
+        field = _DOC_SELECT_SORT_FIELDS.get(logical_index)
+        if not field:
+            return
+        if self.sort_column_index == logical_index:
+            self.sort_order = "ASC" if self.sort_order == "DESC" else "DESC"
+        else:
+            self.sort_column_index = logical_index
+            if field in ("pub_year",):
+                self.sort_order = "DESC"
+            else:
+                self.sort_order = "ASC"
+        self._update_header_indicators()
+        self._apply_sort()
+        self._populate_table()
+
+    def _update_header_indicators(self) -> None:
+        arrow = " ▲" if self.sort_order == "ASC" else " ▼"
+        for idx, base_label in enumerate(_DOC_SELECT_BASE_HEADER_LABELS):
+            item = self.table.horizontalHeaderItem(idx)
+            if item is None:
+                item = QTableWidgetItem()
+                self.table.setHorizontalHeaderItem(idx, item)
+            if self.sort_column_index is not None and idx == self.sort_column_index:
+                item.setText(f"{base_label}{arrow}")
+            else:
+                item.setText(base_label)
+
+    def _get_current_order_by(self) -> str:
+        if self.sort_column_index is None:
+            return "updated_at DESC"
+        field = _DOC_SELECT_SORT_FIELDS.get(self.sort_column_index, "updated_at")
+        direction = self.sort_order
+        if field == "download_status":
+            return f"download_status {direction}"
+        return f"{field} {direction}"
+
+    def _apply_sort(self) -> None:
+        if self.sort_column_index is None:
+            return
+        field = _DOC_SELECT_SORT_FIELDS.get(self.sort_column_index)
+        if not field:
+            return
+        reverse = (self.sort_order == "DESC")
+
+        def _sort_key(doc: dict[str, Any]) -> tuple[Any, str]:
+            doc_id = str(doc.get("doc_id") or "")
+            val = doc.get(field)
+            if field == "pub_year":
+                try:
+                    num = int(val) if (val is not None and str(val).isdigit()) else None
+                except Exception:
+                    num = None
+                if num is None:
+                    primary = -999999 if reverse else 999999
+                else:
+                    primary = num
+            elif field == "authors":
+                text = _format_authors_short(val).lower()
+                primary = (chr(0) if reverse else chr(0x10FFFF)) if (not text or text == "—") else text
+            elif field == "download_status":
+                dl = str(doc.get("download_status") or "")
+                pr = str(doc.get("parse_status") or "")
+                text = f"{dl} / {pr}".lower() if pr else dl.lower()
+                primary = (chr(0) if reverse else chr(0x10FFFF)) if not text else text
+            else:
+                text = str(val or "").strip().lower()
+                primary = (chr(0) if reverse else chr(0x10FFFF)) if not text else text
+            return (primary, doc_id)
+
+        self._all_docs.sort(key=_sort_key, reverse=reverse)
+        self._filtered_docs.sort(key=_sort_key, reverse=reverse)
+
     # ------------------------------------------------------------- table data
     def _load_data(self) -> None:
+        order_by = self._get_current_order_by()
         if self.db:
             try:
                 self._all_docs = self.db.list_documents_summary(
                     collection_id=self.current_collection_id,
                     limit=100000,
-                    order_by="updated_at DESC",
+                    order_by=order_by,
                 )
             except Exception as e:
                 log.exception("Failed to load documents summary: %s", e)
                 self._all_docs = []
         else:
             self._all_docs = []
+        if self.sort_column_index is not None:
+            self._apply_sort()
         self._apply_filter()
 
     def _apply_filter(self) -> None:
@@ -388,7 +484,8 @@ class DocSelectDialog(QDialog):
                 if (query in title or query in doc_id or query in authors or query in journal or query in year):
                     filtered.append(d)
             self._filtered_docs = filtered
-
+        if self.sort_column_index is not None:
+            self._apply_sort()
         self._populate_table()
 
     def _populate_table(self) -> None:
