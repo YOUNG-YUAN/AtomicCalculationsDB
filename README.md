@@ -240,7 +240,7 @@ All historical engineering specs, bugfix records, and architectural task documen
 | **[UpdateTask_07.md](update_log/UpdateTask_07.md)** | **v2.6.0** | Dual-path Agent integration (MCP protocol support) |
 | **[UpdateTask_08~10.md](update_log/UpdateTask_08.md)** | **v2.7–2.9** | Local ONNX engine migration, anomaly radar debouncing, memory safety |
 | **[UpdateTask_11.md](update_log/UpdateTask_11.md)** | **v3.0.0 (Latest)** | **Preamble Ingestion, Lossless Table Compression, Generalized Conjectures, Hard Provenance, 10-Row Viewport, Windows DPAPI Encryption** |
-| **[FixTask_*.md (28 Files)](update_log/)** | **v2.2–v3.0 Patches** | 28 rigorous bugfix records (memory optimizations, Web AI reply parsing fault-tolerance, ETA estimation) |
+| **[FixTask_*.md (27 Files)](update_log/)** | **v2.2–v2.9 Patches** | 27 rigorous bugfix records (memory optimizations, ETA estimation, queue retries) |
 
 ---
 
