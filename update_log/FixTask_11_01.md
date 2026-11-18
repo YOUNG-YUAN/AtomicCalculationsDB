@@ -136,3 +136,47 @@
    - 当大模型漏输 `title_zh` 与 `title` 时，自动提取 `summary_zh` 中首句物理结论（过滤换行后截取前 45 字符）生成紧凑标题；
    - 若无总结则以 `{ion_stage} {physical_process} 提炼卡片` 兜底，坚决杜绝空标题卡片入库；
 3. **新增单元测试**：在 `tests/test_v301.py` 中新增 `test_gemini_argon_high_json_parsing` 回归测试，全量测试用例增至 **216 passed (100% 通过)**。
+
+---
+
+## 7. 写入数据库致命崩溃修复：原子序数（Z）数值溢出与 SQLite INTEGER 上限防护
+
+### 7.1 故障现象与根因诊断（对应“写入失败: Python int too large to convert to SQLite INTEGER”）
+用户在半自动提炼弹窗中点击“写入知识库”时，界面卡住并弹出模态错误框：`写入失败: Python int too large to convert to SQLite INTEGER`。
+
+经断点排查真实运行现场与 `batch_25` 数据：
+1. **大模型回复格式**：针对文献 `DOC-PAP-0000-D708BD-58`（类氮等电子序列），大模型输出了说明性范围字符串：
+   `"z_num": "18-30 (Table 7 涵盖 Z=19, 21, 22, 23, 24, 26, 27；Table 6 涵盖 Z=26)"`；
+2. **粗暴提取导致数字爆炸**：原 `_sanitize_card_dict` 中处理代码为：
+   ```python
+   digits = "".join(c for c in z_val if c.isdigit())
+   card["z_num"] = int(digits) if digits else None
+   ```
+   该逻辑将字符串中出现的所有数字字符一股脑连接成了 `1830719212223242627626`（长达 22 位，数量级达 $1.83 \times 10^{21}$）；
+3. **SQLite 64 位有符号整型溢出**：
+   - 64 位整数上限为 $2^{63}-1 = 9,223,372,036,854,775,807$；
+   - 当 `pipeline._store_draft` 调用 `db.list_knowledge_cards(filters={"z_num": 1830719212223242627626, ...})` 时，`sqlite3` 驱动在绑定参数 `WHERE c.z_num = ?` 处抛出 `OverflowError: Python int too large to convert to SQLite INTEGER`；
+4. **伴随排查发现的 `batch_05` 引文跳过问题**：
+   在 `batch_05/reply.txt` 的 `search_payload` 中包含未转义引文 `under "Mixing coefficients LSJ": Key 42...`。原 `repair_inner_quotes` 采用 `line.count('":') > 1` 检测多属性，因引文中带冒号而被误判跳过，导致该 batch 曾报 `回复格式错误`。
+
+### 7.2 解决方案与多层纵深防御体系
+
+1. **物理语义归一化函数 `sanitize_z_num`（`parser/card_quality.py`）**：
+   - 严格限定原子序数物理合法范围 $1 \le Z \le 250$；
+   - 凡是检测到区间连字符（如 `18-30`, `18~30`, `18 to 30`, `18至30`）或多组原子序数，判定为等电子序列卡片，`z_num` 统一归一化为 `None`（序列信息由 `element` / `isoelectronic` 表达）；
+   - 仅当明确指定单一原子序数（如 `26`, `Z=26`, `Fe XX (Z=26)`）且在 $[1, 250]$ 内时，才提取为整型，其余一律置 `None`。
+2. **年份提取加固（`web_ai_bridge.py`）**：
+   - `_sanitize_result_payload` 中的 `document_year` 改用四位年份正则 `re.search(r"\b(19\d\d|20\d\d)\b", y)` 提取，彻底杜绝粗暴数字拼接。
+3. **引文引号修复精准识别（`atomic_prompts.py`）**：
+   - 重构 `repair_inner_quotes`：只有行内实际出现 `, "<key>":`（逗号分隔的下一属性）或结构符号 `": [`、`": {` 时才跳过；纯文本中出现的 `"Key": Value` 英文引文能够被正确识别并安全转义。
+4. **SQLite 底层纵深安全护栏（`sqlite_manager.py`）**：
+   - 在 `_card_filter_sql` 中对 `filters.get("z_num")` 进行数值校验，非合法 $[1, 250]$ 整数绝不拼入 SQL 参数绑定；
+   - 在 `upsert_knowledge_card` 中安全钳制 `z_num` 为 $[1, 250]$ 或 `None`；
+   - 在 `card_hash.py`、`hybrid_retriever.py`、`qdrant_manager.py` 中全量覆盖 `OverflowError` 拦截。
+5. **事务回滚与用户恢复**：
+   - `finalize_run` 全过程在 `db.transaction()` 保护下进行，报错时已完整自动回滚，数据库没有残留脏数据；
+   - 用户在“写入失败”弹窗点击“确定”后，直接在半自动窗口再次点击“写入知识库”即可顺利入库。
+
+### 7.3 验证结果
+- 在 `tests/test_v301.py` 中补充 `test_sanitize_z_num_and_overflow_protection` 与 `test_repair_inner_quotes_with_inner_colon_prose` 两个测试；
+- 全工程单元测试通过总数提升至 **218 passed (100% 通过)**。

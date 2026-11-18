@@ -281,3 +281,57 @@ transitions)","premises_and_conditions":"针对类氮 Fe XX 离子的 359 个精
     assert len(res62.cards[0].title_zh) > 0
 
 
+def test_sanitize_z_num_and_overflow_protection():
+    from parser.card_quality import sanitize_z_num
+    import tempfile
+    from db.sqlite_manager import SQLiteManager
+
+    # 1. Atomic bounds and sequence ranges
+    assert sanitize_z_num("18-30 (Table 7 涵盖 Z=19, 21, 22, 23, 24, 26, 27；Table 6 涵盖 Z=26)") is None
+    assert sanitize_z_num("18-30") is None
+    assert sanitize_z_num("18~30") is None
+    assert sanitize_z_num("18 to 30") is None
+    assert sanitize_z_num("18至30") is None
+    assert sanitize_z_num(1830719212223242627626) is None  # > 250
+    assert sanitize_z_num(-1) is None
+    assert sanitize_z_num(0) is None
+    assert sanitize_z_num(251) is None
+    assert sanitize_z_num(26) == 26
+    assert sanitize_z_num("26") == 26
+    assert sanitize_z_num("Z=74") == 74
+    assert sanitize_z_num("Z = 74") == 74
+    assert sanitize_z_num("Fe XX (Z=26)") == 26
+    assert sanitize_z_num("26 (Fe)") == 26
+    assert sanitize_z_num(None) is None
+    assert sanitize_z_num("") is None
+
+    # 2. SQLite integer overflow protection
+    td = tempfile.mkdtemp()
+    db = SQLiteManager(td)
+    # Query with monster int
+    cards = db.list_knowledge_cards(filters={"z_num": 1830719212223242627626})
+    assert cards == []
+    # Upsert with monster int directly
+    cid = db.upsert_knowledge_card({
+        "title_zh": "测试溢出保护",
+        "card_type": "CONC",
+        "z_num": 1830719212223242627626,
+        "summary_zh": "测试摘要",
+    })
+    stored = db.get_knowledge_card(cid)
+    assert stored.get("z_num") is None
+    db.close()
+
+
+def test_repair_inner_quotes_with_inner_colon_prose():
+    # Line like batch 05 line 86 with prose quotes containing colons
+    raw_line = '  "search_payload": "Evidence under \\"Mixing coefficients LSJ\\": Key 42, −0.73(47)"'
+    # Unescaped version
+    unescaped_line = '  "search_payload": "Evidence under "Mixing coefficients LSJ": Key 42, −0.73(47)"'
+    repaired = repair_inner_quotes(unescaped_line)
+    assert '\\"Mixing coefficients LSJ\\":' in repaired
+    data = json.loads("{" + repaired + "}", strict=False)
+    assert "search_payload" in data
+
+
+

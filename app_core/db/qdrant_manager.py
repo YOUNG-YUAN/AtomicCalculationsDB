@@ -308,11 +308,16 @@ class QdrantManager:
                     )
                 )
         if filters.get("z_num") not in (None, ""):
-            must.append(
-                models.FieldCondition(
-                    key="z_num", match=models.MatchValue(value=int(filters["z_num"]))
-                )
-            )
+            try:
+                z_int = int(filters["z_num"])
+                if 1 <= z_int <= 250:
+                    must.append(
+                        models.FieldCondition(
+                            key="z_num", match=models.MatchValue(value=z_int)
+                        )
+                    )
+            except (ValueError, TypeError, OverflowError):
+                pass
         # method / physical_process are intentionally post-filtered in the
         # retriever because cards store composite labels such as MCDHF+RCI and
         # Qdrant payload indexes are exact-match oriented.

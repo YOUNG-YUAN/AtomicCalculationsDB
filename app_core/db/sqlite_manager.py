@@ -1506,8 +1506,13 @@ class SQLiteManager:
             except (TypeError, ValueError):
                 authority = 1.0
             try:
-                z_num = int(pick("z_num")) if pick("z_num") not in (None, "") else None
-            except (TypeError, ValueError):
+                z_pick = pick("z_num")
+                if z_pick not in (None, ""):
+                    z_int = int(z_pick)
+                    z_num = z_int if 1 <= z_int <= 250 else None
+                else:
+                    z_num = None
+            except (TypeError, ValueError, OverflowError):
                 z_num = None
             try:
                 page_num = int(pick("page_num")) if pick("page_num") not in (None, "") else None
@@ -2509,9 +2514,15 @@ class SQLiteManager:
         if filters.get("element"):
             clauses.append(f"UPPER({prefix}element) = UPPER(?)")
             params.append(str(filters["element"]))
-        if filters.get("z_num") not in (None, ""):
-            clauses.append(f"{prefix}z_num = ?")
-            params.append(int(filters["z_num"]))
+        z_filter = filters.get("z_num")
+        if z_filter not in (None, ""):
+            try:
+                z_int = int(z_filter)
+                if 1 <= z_int <= 250:
+                    clauses.append(f"{prefix}z_num = ?")
+                    params.append(z_int)
+            except (ValueError, TypeError, OverflowError):
+                pass
         if filters.get("isoelectronic"):
             clauses.append(f"LOWER({prefix}isoelectronic) = LOWER(?)")
             params.append(str(filters["isoelectronic"]))

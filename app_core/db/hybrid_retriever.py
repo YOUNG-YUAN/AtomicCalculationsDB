@@ -862,8 +862,12 @@ class HybridRetriever:
             value = filters.get(field)
             if value not in (None, "") and str(card.get(field) or "").lower() != str(value).lower():
                 return False
-        if filters.get("z_num") not in (None, "") and int(card.get("z_num") or -1) != int(filters["z_num"]):
-            return False
+        if filters.get("z_num") not in (None, ""):
+            try:
+                if int(card.get("z_num") or -1) != int(filters["z_num"]):
+                    return False
+            except (ValueError, TypeError, OverflowError):
+                return False
         for field in ("method", "physical_process", "code_name"):
             value = filters.get(field)
             if value not in (None, "") and str(value).lower() not in str(card.get(field) or "").lower():

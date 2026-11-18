@@ -14,6 +14,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
+from parser.card_quality import sanitize_z_num
 from parser.context_bundler import ContextBundle
 
 
@@ -215,14 +216,7 @@ class KnowledgeCardDraft(BaseModel):
     @field_validator("z_num", mode="before")
     @classmethod
     def _normalize_z_num(cls, value: Any) -> Any:
-        if value is None:
-            return None
-        if isinstance(value, bool):
-            return None
-        if isinstance(value, (int, float)):
-            return int(value)
-        text = str(value).strip()
-        return int(text) if text.isdigit() else None
+        return sanitize_z_num(value)
 
     @field_validator("formulas_latex", mode="before")
     @classmethod
@@ -396,15 +390,13 @@ def repair_inner_quotes(raw: str) -> str:
     new_lines = []
     for line in raw.splitlines():
         # Do not corrupt lines containing multiple JSON properties or structural syntax!
-        if line.count('":') > 1 or '": [' in line or '": {' in line or re.search(r'",\s*"', line):
-            new_lines.append(line)
-            continue
         m = line_pattern.match(line)
         if m:
             prefix, content, suffix = m.group(1), m.group(2), m.group(3)
-            new_lines.append(prefix + escape_unescaped_quotes(content) + suffix)
-        else:
-            new_lines.append(line)
+            if '": [' not in content and '": {' not in content and not re.search(r',\s*"[a-zA-Z0-9_]+"\s*:', content):
+                new_lines.append(prefix + escape_unescaped_quotes(content) + suffix)
+                continue
+        new_lines.append(line)
     return "\n".join(new_lines)
 
 

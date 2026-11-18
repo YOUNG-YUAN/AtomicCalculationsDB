@@ -64,11 +64,55 @@ def clean_formula_field(value: Any) -> tuple[str, str]:
     return formula, " ".join(notes).strip()
 
 
+def sanitize_z_num(value: Any) -> int | None:
+    """Normalize atomic number Z to an integer in [1, 250], or None for ranges/sequences/invalid."""
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        try:
+            z = int(value)
+            return z if 1 <= z <= 250 else None
+        except (TypeError, ValueError, OverflowError):
+            return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.isdigit():
+        try:
+            z = int(text)
+            return z if 1 <= z <= 250 else None
+        except (ValueError, OverflowError):
+            return None
+    # If it represents an isoelectronic sequence or range (e.g. 18-30, 18~30, 18 to 30, Z=19-27):
+    # This covers multiple elements, so z_num should be None (sequence level)
+    if re.search(r"\d+\s*[-~至到]\s*\d+", text):
+        return None
+    z_matches = re.findall(r"\bZ\s*=\s*(\d+)\b", text, re.IGNORECASE)
+    if len(z_matches) == 1:
+        try:
+            z = int(z_matches[0])
+            return z if 1 <= z <= 250 else None
+        except (ValueError, OverflowError):
+            return None
+    elif len(z_matches) > 1:
+        return None
+    all_ints = re.findall(r"\b\d+\b", text)
+    if len(all_ints) == 1:
+        try:
+            z = int(all_ints[0])
+            return z if 1 <= z <= 250 else None
+        except (ValueError, OverflowError):
+            return None
+    return None
+
+
 def sanitize_card_fields(card: Mapping[str, Any]) -> tuple[dict[str, Any], str]:
-    """Copy a card payload and sanitize its formula field."""
+    """Copy a card payload and sanitize its formula and atomic number fields."""
     result = dict(card)
     formula, notes = clean_formula_field(result.get("formulas_latex"))
     result["formulas_latex"] = formula
+    if "z_num" in result:
+        result["z_num"] = sanitize_z_num(result.get("z_num"))
     if notes:
         summary = str(result.get("summary_zh") or "").strip()
         if notes not in summary:
@@ -204,4 +248,5 @@ __all__ = [
     "purge_invalid_cards",
     "sanitize_card_fields",
     "sanitize_existing_cards",
+    "sanitize_z_num",
 ]

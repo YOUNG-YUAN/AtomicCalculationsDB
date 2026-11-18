@@ -66,8 +66,9 @@ def canonical_card_content(card: Mapping[str, Any]) -> dict[str, Any]:
                 value = 0
         elif field == "z_num":
             try:
-                value = int(value) if value not in (None, "") else None
-            except (TypeError, ValueError):
+                v = int(value) if value not in (None, "") else None
+                value = v if v is not None and 1 <= v <= 250 else None
+            except (TypeError, ValueError, OverflowError):
                 value = None
         elif field == "page_num":
             try:

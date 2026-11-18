@@ -25,6 +25,7 @@ from models.atomic_prompts import (
     ExtractionResult,
     parse_extraction_json,
     repair_json_text,
+    sanitize_z_num,
 )
 from models.endpoint_pool import EndpointNode
 from models.aistudio_autopilot import (
@@ -881,12 +882,7 @@ def _sanitize_card_dict(raw_card: Mapping[str, Any]) -> dict[str, Any]:
         card["card_type"] = "CONC"
 
     # 3. z_num normalization
-    z_val = card.get("z_num")
-    if isinstance(z_val, str):
-        digits = "".join(c for c in z_val if c.isdigit())
-        card["z_num"] = int(digits) if digits else None
-    elif not isinstance(z_val, int):
-        card["z_num"] = None
+    card["z_num"] = sanitize_z_num(card.get("z_num"))
 
     # 4. formulas_latex: list of LaTeX strings -> newline separated string
     flatex = card.get("formulas_latex")
@@ -957,9 +953,11 @@ def _sanitize_result_payload(raw_res: Mapping[str, Any]) -> dict[str, Any]:
     # 1. document_year
     y = res.get("document_year")
     if isinstance(y, str):
-        digits = "".join(c for c in y if c.isdigit())
-        res["document_year"] = int(digits) if digits else None
-    elif not isinstance(y, int):
+        m = re.search(r"\b(19\d\d|20\d\d)\b", y)
+        res["document_year"] = int(m.group(1)) if m else None
+    elif isinstance(y, int) and 1000 <= y <= 2999:
+        res["document_year"] = y
+    else:
         res["document_year"] = None
 
     # 2. keywords
