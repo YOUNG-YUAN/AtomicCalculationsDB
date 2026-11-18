@@ -1,4 +1,4 @@
-# UpdateTask_12.md — `AtomicCalculationDB` (v3.0.1) 网页大模型回复解析引擎容错加固与提示词规范优化
+# FixTask_11_01.md — `AtomicCalculationDB` (v3.0.1) 网页大模型回复解析引擎容错加固与提示词规范优化
 
 > **版本定位**：从 `v3.0.0` 正式平滑升级至 `v3.0.1`（Build `20261118`）。
 > **核心目标**：针对真实场景下 Web AI（如 GPT-6.1 / Claude 等）返回的含未转义多行控制字符、单行混排多键值对、嵌套字典型物理延拓 (`generalized_conjecture`) 以及中文卡片类型（如“理论交叉验证”、“精度诊断”）等非标格式，对底层 JSON 提取引擎与 Pydantic 数据契约进行全面容错加固，并同步升级 Prompt 提示词规范。

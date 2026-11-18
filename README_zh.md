@@ -229,7 +229,7 @@ python launcher.py
 | **[UpdateTask_07.md](update_log/UpdateTask_07.md)** | **v2.6.0** | 双路径 Agent 对接架构（MCP 协议双向工单与审计支持） |
 | **[UpdateTask_08~10.md](update_log/UpdateTask_08.md)** | **v2.7~2.9** | 纯本地 ONNX 引擎平滑迁移、争议雷达降噪、全库清洗内存安全优化 |
 | **[UpdateTask_11.md](update_log/UpdateTask_11.md)** | **v3.0.0 (当前最新)** | **全局公理打捞、纯表格无损压缩、物理延拓与相界深度归纳、硬溯源链、双模算力池角色统一与 10 行视口规格化、Windows DPAPI 凭据安全加密** |
-| **[FixTask_*.md (27篇)](update_log/)** | **v2.2~v2.9 补丁** | 27 篇严密的设计消缺记录（包含内存优化、ETA 预估、排队重试、半自动卡槽等） |
+| **[FixTask_*.md (28篇)](update_log/)** | **v2.2~v3.0 补丁** | 28 篇严密的设计消缺记录（包含内存优化、网页AI回复容错解析、ETA 预估、半自动卡槽等） |
 
 ---
 
