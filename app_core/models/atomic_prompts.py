@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Mapping
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
@@ -128,6 +129,29 @@ class KnowledgeCardDraft(BaseModel):
     search_payload: str = ""
     generalized_conjecture: str | None = None
 
+    @field_validator("generalized_conjecture", mode="before")
+    @classmethod
+    def _coerce_generalized_conjecture(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return value.strip() or None
+        if isinstance(value, Mapping):
+            parts = []
+            stmt = value.get("statement_zh") or value.get("statement")
+            if stmt:
+                parts.append(str(stmt).strip())
+            basis = value.get("physical_basis_zh") or value.get("physical_basis")
+            if basis:
+                parts.append(f"【物理基础】: {str(basis).strip()}")
+            bnd = value.get("boundary_zh") or value.get("boundary")
+            if bnd:
+                parts.append(f"【适用边界】: {str(bnd).strip()}")
+            if parts:
+                return "\n".join(parts)
+            return json.dumps(value, ensure_ascii=False)
+        return str(value)
+
     @field_validator("keywords", mode="before")
     @classmethod
     def _coerce_keywords(cls, value: Any) -> list[str]:
@@ -163,6 +187,26 @@ class KnowledgeCardDraft(BaseModel):
             ("WARN", "PITFALL"),
             ("CONCLUS", "CONC"),
             ("RESULT", "CONC"),
+            ("BENCHMARK", "CONC"),
+            ("DIAGNO", "CONC"),
+            ("策略", "STRAT"),
+            ("方法", "STRAT"),
+            ("流程", "STRAT"),
+            ("模型", "MODEL"),
+            ("势函数", "MODEL"),
+            ("算符", "MODEL"),
+            ("代码", "CODE"),
+            ("程序", "CODE"),
+            ("算法", "CODE"),
+            ("公式", "CODE"),
+            ("避坑", "PITFALL"),
+            ("陷阱", "PITFALL"),
+            ("失效", "PITFALL"),
+            ("结论", "CONC"),
+            ("诊断", "CONC"),
+            ("比较", "CONC"),
+            ("基准", "CONC"),
+            ("验证", "CONC"),
         ):
             if token in raw:
                 return canonical
@@ -259,8 +303,10 @@ CARD_SYSTEM_PROMPT = """你是一位顶尖的计算原子物理学家（精通 M
 0. 质量控制：若当前片段信息残缺、被截断，或无法提炼出明确的物理结论，直接输出 `{"skip": true}`，不要生成标题带“（证据截断）”或正文为“无法可靠重建具体计算策略”的废卡。
 1. 消解所有代词与模型代号：如果结论中提到 "Model B"、"Set II" 或 "this scheme"，你必须结合【回溯定义】和【策略表格】将其替换为具体的物理操作（如：打开了哪一层芯壳层、激发阶数是 SD 还是 SDT、活性空间扩展到哪个 n/l 轨道）。
 2. 强制绑定前提条件 (`premises_and_conditions`)：任何结论或计算策略都必须写明其生效的体系特征（如 Z 范围、壳层结构）、理论框架及前置近似，严禁输出脱离前提的孤立断言！
-3. 提取数学公式与代码参数：若有哈密顿量、模型势函数（如芯极化势、QED 势），提取标准 LaTeX 并说明各符号物理意义与所做近似（如 NVPA、长波近似）。`formulas_latex` 只能放纯数学表达式，英文解释句必须放入 `summary_zh` 或 `premises_and_conditions`，并过滤 `vuuut1` 等 PDF 私有字体伪影。注意：JSON 内部的所有 LaTeX 反斜杠必须写为双反斜杠（如 \\frac, \\alpha, \\beta 而非单个 \），以防破坏 JSON 语法。
-4. 生成中英双语检索载荷 (`search_payload`)：按以下格式拼接，以供 BGE-M3 向量化：
+3. 提取数学公式与代码参数：若有哈密顿量、模型势函数（如芯极化势、QED 势），提取标准 LaTeX 并说明各符号物理意义与所做近似（如 NVPA、长波近似）。`formulas_latex` 只能放纯数学表达式，英文解释句必须放入 `summary_zh` 或 `premises_and_conditions`，并过滤 `vuuut1` 等 PDF 私有字体伪影。注意：JSON 内部的所有 LaTeX 反斜杠必须写为双反斜杠（如 \\frac, \\alpha, \\delta, \\beta 而非单个 \\），以防破坏 JSON 语法。
+4. 卡片类型与中英文检索载荷 (`search_payload`)：
+   - `card_type` 支持标准类型：STRAT (计算策略/方法流程), MODEL (哈密顿量/物理模型/势函数), CODE (程序/算法/数值方法), PITFALL (避坑指南/失效陷阱), CONC (物理结论/基准比较/精度诊断)。
+   - 按以下格式拼接 `search_payload`，以供 BGE-M3 向量化：
    "[类型:{card_type} | 体系:{ion_stage} ({isoelectronic}, Z={z_num}) | 方法:{method} ({code_name}) | 过程:{physical_process}]
     [前提与边界]: {premises_and_conditions}
     [核心策略与结论(中)]: {summary_zh}
@@ -268,8 +314,8 @@ CARD_SYSTEM_PROMPT = """你是一位顶尖的计算原子物理学家（精通 M
     [Key Evidence(EN)]: {最关键的 1~2 句英文原句及关键量化指标}"
 5. 同时校验文献元数据：若正文/页眉可辨认，请在 JSON 顶层返回 `document_title`、`document_journal`、`document_year`、`document_doi`；无法确认时留空，严禁猜测。
 6. 只输出一个 JSON 对象，不要使用 Markdown 代码围栏或额外解释。必须符合给定的 JSON Schema。
-7. 适用条件结构化：填写 `conditions` 对象（target_quantity、unit、value、uncertainty、state_initial、state_final、transition、j_parity、method_boundary、convergence、applicability）。未报告的字段填 `unknown`，明确不适用填 `not_applicable`，并把无法判断的字段名放入 `unknown_fields`。不要把未知条件留空后解释成“任意情况均适用”。
-8. 广义物理延拓 (`generalized_conjecture`)：若本卡片反映了某种规律、趋势或机理，请遵循原子物理规律做一步合理的广义延拓，严禁胡乱推演；若缺乏明确物理依据或仅为孤立单纯数值，坚决填 null。
+7. 适用条件结构化：填写 `conditions` 对象（target_quantity、unit、value、uncertainty、state_initial、state_final、transition、j_parity、method_boundary、convergence、applicability）。11 个字段的值必须为纯字符串。未报告的字段填 `unknown`，明确不适用填 `not_applicable`，并把无法判断的字段名放入 `unknown_fields`。不要把未知条件留空后解释成“任意情况均适用”。
+8. 广义物理延拓 (`generalized_conjecture`)：若本卡片反映了某种规律、趋势或机理，请遵循原子物理规律做一步合理的广义延拓（写为纯字符串，可说明物理基础与适用边界），严禁胡乱推演；若缺乏明确物理依据或仅为孤立单纯数值，坚决填 null。
 """
 
 
@@ -340,9 +386,19 @@ def repair_inner_quotes(raw: str) -> str:
     """Repair unescaped double quotes inside single-line JSON string property values."""
     if not raw:
         return raw
+    # If the text is already valid JSON, don't modify it
+    try:
+        json.loads(raw, strict=False)
+        return raw
+    except Exception:
+        pass
     line_pattern = re.compile(r'^(\s*"[a-zA-Z0-9_]+"\s*:\s*")(.*)("(?:\s*,)?\s*)$')
     new_lines = []
     for line in raw.splitlines():
+        # Do not corrupt lines containing multiple JSON properties or structural syntax!
+        if line.count('":') > 1 or '": [' in line or '": {' in line or re.search(r'",\s*"', line):
+            new_lines.append(line)
+            continue
         m = line_pattern.match(line)
         if m:
             prefix, content, suffix = m.group(1), m.group(2), m.group(3)
@@ -356,6 +412,12 @@ def repair_json_text(text: str) -> str:
     """Repair unescaped LaTeX backslashes and invalid escapes in LLM-generated JSON strings."""
     if not text:
         return text
+    # If the text is already valid JSON, don't touch it
+    try:
+        json.loads(text, strict=False)
+        return text
+    except Exception:
+        pass
     text = repair_inner_quotes(text)
     result: list[str] = []
     i = 0

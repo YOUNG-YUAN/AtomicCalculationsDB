@@ -793,7 +793,7 @@ class ClipboardPacket:
 def _extract_json_payload(text: str) -> Any:
     body = str(text or "").strip()
     try:
-        value = json.loads(body)
+        value = json.loads(body, strict=False)
         if isinstance(value, (dict, list)):
             return value
     except Exception:
@@ -801,7 +801,7 @@ def _extract_json_payload(text: str) -> Any:
 
     repaired_body = repair_json_text(body)
     try:
-        value = json.loads(repaired_body)
+        value = json.loads(repaired_body, strict=False)
         if isinstance(value, (dict, list)):
             return value
     except Exception:
@@ -810,20 +810,20 @@ def _extract_json_payload(text: str) -> Any:
     candidates: list[Any] = []
     for block in re.findall(r"```(?:json)?\s*(.+?)```", body, re.S | re.I):
         try:
-            value = json.loads(block.strip())
+            value = json.loads(block.strip(), strict=False)
             if isinstance(value, (dict, list)):
                 candidates.append(value)
                 continue
         except Exception:
             pass
         try:
-            value = json.loads(repair_json_text(block.strip()))
+            value = json.loads(repair_json_text(block.strip()), strict=False)
             if isinstance(value, (dict, list)):
                 candidates.append(value)
         except Exception:
             pass
 
-    decoder = json.JSONDecoder()
+    decoder = json.JSONDecoder(strict=False)
     # Scan left-to-right on repaired_body so an outer {"items": [...]} wins over a nested card
     # object that happens to appear later in the text.
     for start, character in enumerate(repaired_body):
@@ -854,17 +854,15 @@ def _sanitize_card_dict(raw_card: Mapping[str, Any]) -> dict[str, Any]:
 
     # 2. card_type normalization to valid CARD_TYPES (STRAT, MODEL, CODE, PITFALL, CONC)
     ctype = str(card.get("card_type") or "").upper().strip()
-    if ctype in ("METHODOLOGY", "METHOD", "STRAT", "STRATEGY"):
+    if any(k in ctype for k in ("METHODOLOGY", "METHOD", "STRAT", "STRATEGY", "策略", "方法", "流程")):
         card["card_type"] = "STRAT"
-    elif ctype in ("FORMULA", "MODEL", "METHOD_BOUNDARY", "BOUNDARY"):
+    elif any(k in ctype for k in ("FORMULA", "MODEL", "METHOD_BOUNDARY", "BOUNDARY", "模型", "势函数", "算符")):
         card["card_type"] = "MODEL"
-    elif ctype in ("CODE", "SNIPPET", "SCRIPT"):
+    elif any(k in ctype for k in ("CODE", "SNIPPET", "SCRIPT", "PROGRAM", "ALGORITHM", "代码", "程序", "算法", "公式")):
         card["card_type"] = "CODE"
-    elif ctype in ("PITFALL", "WARNING", "CAUTION"):
+    elif any(k in ctype for k in ("PITFALL", "WARNING", "CAUTION", "TRAP", "ERROR", "避坑", "陷阱", "失效")):
         card["card_type"] = "PITFALL"
-    elif ctype in ("CONC", "CONCLUSION", "DATA", "VALUE"):
-        card["card_type"] = "CONC"
-    elif ctype not in ("STRAT", "MODEL", "CODE", "PITFALL", "CONC"):
+    else:
         card["card_type"] = "CONC"
 
     # 3. z_num normalization
@@ -884,11 +882,26 @@ def _sanitize_card_dict(raw_card: Mapping[str, Any]) -> dict[str, Any]:
     else:
         card["formulas_latex"] = str(flatex)
 
-    # 5. generalized_conjecture into structured_details
+    # 5. generalized_conjecture into structured_details and string coercion
     gen_conj = card.get("generalized_conjecture")
     if gen_conj:
         struct = dict(card.get("structured_details") or {})
-        struct["generalized_conjecture"] = str(gen_conj).strip()
+        if isinstance(gen_conj, Mapping):
+            struct["generalized_conjecture"] = json.dumps(gen_conj, ensure_ascii=False)
+            parts = []
+            stmt = gen_conj.get("statement_zh") or gen_conj.get("statement")
+            if stmt:
+                parts.append(str(stmt).strip())
+            basis = gen_conj.get("physical_basis_zh") or gen_conj.get("physical_basis")
+            if basis:
+                parts.append(f"【物理基础】: {str(basis).strip()}")
+            bnd = gen_conj.get("boundary_zh") or gen_conj.get("boundary")
+            if bnd:
+                parts.append(f"【适用边界】: {str(bnd).strip()}")
+            card["generalized_conjecture"] = "\n".join(parts) if parts else json.dumps(gen_conj, ensure_ascii=False)
+        else:
+            struct["generalized_conjecture"] = str(gen_conj).strip()
+            card["generalized_conjecture"] = str(gen_conj).strip()
         card["structured_details"] = struct
 
     # 6. keywords: convert dict list or objects to string list
