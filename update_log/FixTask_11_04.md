@@ -46,11 +46,27 @@
 
 ---
 
-## 3. 验证与交付
+## 3. 关联知识卡 AI 模型溯源防混淆加固（排除物理原子模型 model 字段干扰）
+
+### 3.1 诊断与根因
+在文献详情页右侧知识卡列表中，用户发现部分知识卡右侧显示了非 AI 模型名称（如 `Born-Oppenheimer`、`two-manifold MCDF-AL`、`point nucleus` 等）。
+经深度排查：
+- 知识库中所有 3,655 张卡片的真实来源表 `card_model_provenance` 记录均为真实的 `deepseek-v4.1-flash-1017`，无一例外；
+- 原 `ui/dialogs.py` 的 `get_card_model_name()` 函数在检索卡片来源时，优先遍历了 `card["structured"]` 中的 `model` 键名；
+- 物理领域知识卡（尤其是 `MODEL` 型知识卡）在 `structured` 中存储了**物理原子理论模型**（如 `model="Born-Oppenheimer"`），导致解析器误将物理模型当成提取该卡片的 AI 大模型输出，造成显示混淆。
+
+### 3.2 优化修复
+1. 将 `card_model_provenance` 表的权威溯源记录提升为第一优先级；
+2. 在 `structured` 和卡片顶层字段中，严格只检索 `extractor_model`、`agent_model`、`model_name`，剔除泛化的物理理论模型键名 `model`；
+3. 经重新扫描，`deepseek` 分类下全部 27 篇文献的 3,655 张知识卡统一正确展示为 `deepseek-v4.1-flash-1017`，非 DeepSeek 污染数为 0。
+
+---
+
+## 4. 验证与交付
 
 1. **测试套件**：
    - 新增 `tests/test_v304.py`，完整覆盖精准匹配、单篇子集匹配、部分选中匹配、交集匹配与无参数匹配；
    - 运行全量测试套件，**232 个测试全部通过（100% Passed）**。
 2. **打包与部署**：
    - 同步 `app_core` 至 `C:\Normal Program Files\AtomicCalculationDB\` 及 `dist\`；
-   - 生成本地构建包 `release/AtomicCalculationDB_Patch_v3.0.4.zip` 与 `release/AtomicCalculationDB_Lite_v3.0.4.zip`。
+   - 更新本地构建包 `release/AtomicCalculationDB_Patch_v3.0.4.zip` 与 `release/AtomicCalculationDB_Lite_v3.0.4.zip`。

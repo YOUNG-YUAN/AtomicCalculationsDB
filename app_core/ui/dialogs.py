@@ -139,20 +139,7 @@ def get_card_model_name(
     default_model: str = "",
 ) -> str:
     """Extract human-readable model name that produced this knowledge card."""
-    # 1. From structured details first (e.g. extractor_model stamped by semi-auto / importer)
-    struct = card.get("structured")
-    if not isinstance(struct, dict) and card.get("structured_details_json"):
-        try:
-            struct = json.loads(card["structured_details_json"])
-        except Exception:
-            struct = {}
-    if isinstance(struct, dict):
-        for k in ("extractor_model", "model_name", "agent_model", "model"):
-            v = str(struct.get(k) or "").strip()
-            if v and v not in ("用户手动/外部网页 AI", "外部网页 AI", "未知"):
-                return v
-
-    # 2. From card_model_provenance records
+    # 1. From card_model_provenance records first (most authoritative)
     if card_provenance:
         is_l1 = (
             str(card.get("card_level") or "").upper() == "L1"
@@ -189,12 +176,25 @@ def get_card_model_name(
                 if m:
                     return m
 
+    # 2. From structured details (e.g. extractor_model stamped by semi-auto / importer)
+    struct = card.get("structured")
+    if not isinstance(struct, dict) and card.get("structured_details_json"):
+        try:
+            struct = json.loads(card["structured_details_json"])
+        except Exception:
+            struct = {}
+    if isinstance(struct, dict):
+        for k in ("extractor_model", "agent_model", "model_name"):
+            v = str(struct.get(k) or "").strip()
+            if v and v not in ("用户手动/外部网页 AI", "外部网页 AI", "未知"):
+                return v
+
     # 3. Fallback to default_model (e.g. from document's semi_auto manifest)
     if default_model and default_model.strip():
         return default_model.strip()
 
     # 4. From card top-level fields
-    for k in ("extractor_model", "agent_model", "model", "model_name"):
+    for k in ("extractor_model", "agent_model", "model_name"):
         v = str(card.get(k) or "").strip()
         if v:
             return v
