@@ -334,4 +334,57 @@ def test_repair_inner_quotes_with_inner_colon_prose():
     assert "search_payload" in data
 
 
+def test_stepper_semi_auto_progress_override():
+    from models.pipeline_stepper import (
+        StepStatus,
+        compute_document_pipeline_status,
+    )
+
+    doc = {
+        "doc_id": "DOC-TEST-01",
+        "parse_status": "LIGHT_PARSED",
+        "download_status": "DOWNLOADED",
+    }
+
+    # 1. All batches replied & imported (e.g. 28/28)
+    manifest_all_imported = {
+        "run_id": "run_test_01",
+        "status": "IN_PROGRESS",
+        "batches": [{"batch_id": f"b{i}", "status": "IMPORTED"} for i in range(28)],
+    }
+    st_all = compute_document_pipeline_status(
+        doc,
+        cards=[],
+        semi_auto_manifest=manifest_all_imported,
+    )
+    assert st_all.steps[0].status == StepStatus.COMPLETED
+    assert st_all.steps[1].status == StepStatus.COMPLETED
+    assert st_all.steps[2].status == StepStatus.COMPLETED
+    assert st_all.steps[3].status == StepStatus.PENDING
+    assert st_all.steps[4].status == StepStatus.PENDING
+    # Stepper must be at step 4 (between 3 and 4)
+    assert st_all.current_step == 4
+
+    # 2. Partially imported (e.g. 10/28)
+    manifest_partial = {
+        "run_id": "run_test_02",
+        "status": "IN_PROGRESS",
+        "batches": (
+            [{"batch_id": f"b{i}", "status": "IMPORTED"} for i in range(10)]
+            + [{"batch_id": f"b{i}", "status": "PENDING"} for i in range(10, 28)]
+        ),
+    }
+    st_partial = compute_document_pipeline_status(
+        doc,
+        cards=[],
+        semi_auto_manifest=manifest_partial,
+    )
+    assert st_partial.steps[0].status == StepStatus.COMPLETED
+    assert st_partial.steps[1].status == StepStatus.COMPLETED
+    assert st_partial.steps[2].status == StepStatus.ACTIVE
+    assert st_partial.steps[3].status == StepStatus.PENDING
+    assert st_partial.current_step == 3
+
+
+
 

@@ -371,6 +371,7 @@ class SQLiteManager:
                 dict(doc_row),
                 card_count=count,
                 has_master=has_master,
+                workspace=self.workspace,
             )
             self.conn.execute(
                 "UPDATE documents SET card_count = ?, has_master = ?, "

@@ -971,7 +971,9 @@ class SemiAutoBatchDialog(QDialog):
             doc = self.db.get_document(self.doc_ids[0])
             if doc:
                 cards = self.db.cards_for_document(self.doc_ids[0])
-                status = compute_document_pipeline_status(doc, cards)
+                status = compute_document_pipeline_status(
+                    doc, cards, semi_auto_manifest=self.manifest
+                )
                 self.stepper.set_pipeline_status(status)
                 has_cards = len(cards) > 0
                 self.step5_button.setEnabled(has_cards)

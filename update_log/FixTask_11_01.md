@@ -200,3 +200,33 @@
 >
 > **重要权限边界（严禁越权）**：
 > 打包产物的 Release 发布与远端上传**必须由用户本人手动执行**。AI 仅负责在本地 `release/` 目录下完成合规打包，**绝不能替代用户发布 GitHub Release 或上传产物**。
+
+---
+
+## 9. 提问包全量导入后流水线进度条状态对齐优化（Step 3 自动完结）
+
+### 9.1 故障现象与用户反馈
+用户在半自动提问提炼界面中，已将当前文献的所有提问包全部导入通过（如实测中的 `28/28` 份全部显示绿勾“已导入通过”，界面底部主按钮已变为 `🚀 第二步：写入知识库`）。然而窗口顶部的 5 步流水线指示器依然显示进度停留于第 2 步（提取关键信息）与第 3 步（AI 快速提取）之间，且节点 3 呈现为灰色未完成状态。
+
+### 9.2 根因定位与机制分析
+`compute_document_pipeline_status` 在原设计中仅根据 SQLite 数据库中记录的文档状态 `doc.parse_status`（此时仍为 `LIGHT_PARSED`）与数据库已持久化的知识卡列表计算。在点击“写入知识库”之前，知识库中尚未完成事务写入，因此函数判定处于步骤 2 之后、步骤 3 未完成。未能感知正在进行的半自动任务包 `manifest` 中全量提问包已全部回复导入完毕的事实。
+
+### 9.3 联动优化方案
+1. **未决任务包状态联动感知（`app_core/models/pipeline_stepper.py`）**：
+   - `compute_document_pipeline_status` 支持传入 `semi_auto_manifest` 与 `workspace` 参数（同时具备根据文献路径向上自动检索未决任务包的能力）；
+   - 只要检测到未决任务包中提问包回复已全部导入（`imported == len(batches)` 且未最终写入），立即对流水线状态进行前瞻对齐：
+     - **步骤 1（提取文字）**：`COMPLETED`（绿圈）；
+     - **步骤 2（提取关键信息）**：`COMPLETED`（绿圈）；
+     - **步骤 3（AI 快速提取）**：`COMPLETED`（绿圈，描述更新为 `提问包回复已全部导入 (x/y)，等待写入知识库`）；
+     - **步骤 4（写入数据库）**：`PENDING`（当前待处理节点）；
+     - **流水线当前进度点**：自动跃迁为 `current_step = 4`。
+2. **进度连接线精确渲染（`app_core/ui/step_progress_widget.py`）**：
+   - 当节点 3 完成且节点 4 待处理时，节点 3 与 4 之间的连接线按渐变规范渲染为前半段翠绿、后半段浅灰，**进度条精准停留在 3 与 4 的正中间**，明确指示下一动作是“写入数据库”；
+3. **调用侧全量对齐（`semi_auto_dialog.py`、`library.py`、`sqlite_manager.py`）**：
+   - 弹窗与文献列表视图全线接入联动，确保主界面与弹窗内的指示完全一致。
+
+### 9.4 验证与交付
+- 在 `tests/test_v301.py` 中新增 `test_stepper_semi_auto_progress_override` 单元测试，覆盖全量导入与部分导入双重场景；
+- 全工程 **219 个测试全部通过 (100% passed)**；
+- 代码已同步热更新至 `C:\Normal Program Files\AtomicCalculationDB\` 和 `dist\`；
+- 本地重新打包更新了 `release/AtomicCalculationDB_Patch_v3.0.1.zip` 与 `release/AtomicCalculationDB_Lite_v3.0.1.zip`。

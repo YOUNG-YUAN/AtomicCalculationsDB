@@ -99,6 +99,8 @@ def compute_document_pipeline_status(
     *,
     card_count: int | None = None,
     has_master: bool | None = None,
+    semi_auto_manifest: dict[str, Any] | None = None,
+    workspace: Path | str | None = None,
 ) -> DocumentPipelineStatus:
     """Compute the 5-step status and glow state dynamically from document & cards."""
     doc_id = str(doc.get("doc_id") or "")
@@ -202,6 +204,54 @@ def compute_document_pipeline_status(
         elif download_status == "FAILED":
             steps[0].status = StepStatus.FAILED
             steps[0].error_message = "文献下载失败"
+
+    # Semi-auto batch run progress override (Step 3: AI_FAST, Step 4: DB_WRITE)
+    if semi_auto_manifest is None and doc_id:
+        if workspace:
+            try:
+                ws_path = Path(workspace)
+                if (ws_path / "semi_auto").is_dir():
+                    from models.semi_auto import find_unfinished_run
+                    semi_auto_manifest = find_unfinished_run(ws_path, [doc_id])
+            except Exception:
+                pass
+        if semi_auto_manifest is None and doc.get("local_pdf_path"):
+            try:
+                pdf_path = Path(doc["local_pdf_path"])
+                for parent in (pdf_path.resolve(), *pdf_path.resolve().parents):
+                    if (parent / "semi_auto").is_dir():
+                        from models.semi_auto import find_unfinished_run
+                        semi_auto_manifest = find_unfinished_run(parent, [doc_id])
+                        break
+            except Exception:
+                pass
+
+    if semi_auto_manifest and parse_status != "LLM_EXTRACTED":
+        batches = list(semi_auto_manifest.get("batches") or [])
+        if batches:
+            imported = sum(
+                1
+                for batch in batches
+                if str(batch.get("status")).upper() == "IMPORTED"
+            )
+            finalized = str(semi_auto_manifest.get("status")).upper() == "FINALIZED"
+            if not finalized:
+                steps[0].status = StepStatus.COMPLETED
+                steps[1].status = StepStatus.COMPLETED
+                if imported == len(batches):
+                    # All question packs replied & imported!
+                    # Step 3 (AI 快速提取) is COMPLETED!
+                    # Step 4 (写入数据库) is PENDING (waiting for user to click 写入知识库)!
+                    steps[2].status = StepStatus.COMPLETED
+                    steps[2].description = f"提问包回复已全部导入 ({imported}/{len(batches)})，等待写入知识库"
+                    steps[3].status = StepStatus.PENDING
+                    steps[3].description = "校验卡片、事务入库、检索索引与向量化存储 (待点击「写入知识库」)"
+                    steps[4].status = StepStatus.PENDING
+                elif imported > 0:
+                    steps[2].status = StepStatus.ACTIVE
+                    steps[2].description = f"提问包回复导入中 ({imported}/{len(batches)})"
+                    steps[3].status = StepStatus.PENDING
+                    steps[4].status = StepStatus.PENDING
 
     # Identify current active/next step
     current_step = 1

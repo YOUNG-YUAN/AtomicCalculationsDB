@@ -853,6 +853,7 @@ class LibraryView(QWidget):
                 doc,
                 card_count=int(doc.get("card_count") or 0),
                 has_master=bool(doc.get("has_master") or 0),
+                workspace=self.workspace,
             )
             step_item = QTableWidgetItem()
             step_item.setData(Qt.UserRole, pipe_status.to_dict())
