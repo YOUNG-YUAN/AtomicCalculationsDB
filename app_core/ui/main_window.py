@@ -500,6 +500,7 @@ class MainWindow(QMainWindow):
             page.refresh()
 
     def _refresh_all(self) -> None:
+        sender = self.sender()
         for view in (
             self.explore_view,
             self.night_view,
@@ -507,6 +508,8 @@ class MainWindow(QMainWindow):
             self.sync_view,
             self.settings_view,
         ):
+            if sender is not None and view is sender:
+                continue
             if hasattr(view, "refresh"):
                 view.refresh()
 

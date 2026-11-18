@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import math
-from typing import Any
+from typing import Any, Iterable
 
 from PySide6.QtCore import QPoint, QTimer, Qt, QUrl, Signal
 from PySide6.QtGui import QColor, QDesktopServices
@@ -141,6 +141,11 @@ class LibraryView(QWidget):
         self.current_collection_id = "__all__"
         self.sort_column_index = 0
         self.sort_order = "DESC"
+
+        self._auto_refresh_timer = QTimer(self)
+        self._auto_refresh_timer.setInterval(2500)
+        self._auto_refresh_timer.timeout.connect(self._on_auto_refresh_tick)
+        self._auto_refresh_timer.start()
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -888,6 +893,99 @@ class LibraryView(QWidget):
             self.table.setItem(0, 0, placeholder)
             self.table.setSpan(0, 0, 1, 10)
 
+    def showEvent(self, event: Any) -> None:
+        super().showEvent(event)
+        self.refresh_visible_pipeline_statuses()
+
+    def _on_auto_refresh_tick(self) -> None:
+        if not self.isVisible() or self._loading_table:
+            return
+        self.refresh_visible_pipeline_statuses()
+
+    def refresh_visible_pipeline_statuses(self, doc_ids: Iterable[str] | None = None) -> None:
+        """In-place refresh for pipeline progress, tokens, and statuses without altering document sort order."""
+        if not self.db or self._loading_table:
+            return
+        target_ids = {str(d).strip().upper() for d in doc_ids} if doc_ids is not None else None
+
+        row_count = self.table.rowCount()
+        updated_any = False
+        for row in range(row_count):
+            id_item = self.table.item(row, 0)
+            if not id_item:
+                continue
+            doc_id = str(id_item.data(Qt.UserRole) or id_item.text()).strip()
+            if not doc_id:
+                continue
+            if target_ids is not None and doc_id.upper() not in target_ids:
+                continue
+
+            try:
+                doc = self.db.get_document(doc_id)
+            except Exception as exc:
+                logger.debug("Failed to get document %s for status refresh: %s", doc_id, exc)
+                continue
+            if not doc:
+                continue
+
+            # Column 6: tokens
+            token_item = self.table.item(row, 6)
+            new_tokens_text = (
+                f"入: {int(doc.get('input_tokens') or 0):,} / "
+                f"出: {int(doc.get('output_tokens') or 0):,}"
+            )
+            if token_item and token_item.text() != new_tokens_text:
+                token_item.setText(new_tokens_text)
+                updated_any = True
+
+            # Column 7: download status
+            download_item = self.table.item(row, 7)
+            new_dl_text = download_label(doc.get("download_status"))
+            if download_item and download_item.text() != new_dl_text:
+                download_item.setText(new_dl_text)
+                color = _STATUS_COLORS.get(str(doc.get("download_status", "")).upper())
+                if color:
+                    download_item.setForeground(QColor(color))
+                updated_any = True
+
+            # Column 8: parse status
+            parse_item = self.table.item(row, 8)
+            parse_status = str(doc.get("parse_status", "")).upper()
+            error_code = str(doc.get("parse_error_code", "")).upper()
+            parse_text = "需要 OCR" if error_code == "NEEDS_OCR" else parse_label(parse_status)
+            if parse_item and parse_item.text() != parse_text:
+                parse_item.setText(parse_text)
+                color = _STATUS_COLORS.get("NEEDS_OCR" if error_code == "NEEDS_OCR" else parse_status)
+                if color:
+                    parse_item.setForeground(QColor(color))
+                updated_any = True
+
+            # Column 9: pipeline progress (流程进度)
+            pipe_status = compute_document_pipeline_status(
+                doc,
+                card_count=int(doc.get("card_count") or 0),
+                has_master=bool(doc.get("has_master") or 0),
+                workspace=self.workspace,
+            )
+            new_data = pipe_status.to_dict()
+            step_item = self.table.item(row, 9)
+            if step_item:
+                old_data = step_item.data(Qt.UserRole)
+                if old_data != new_data:
+                    step_item.setData(Qt.UserRole, new_data)
+                    step_item.setToolTip(self._stepper_tooltip(pipe_status))
+                    updated_any = True
+            else:
+                new_step_item = QTableWidgetItem()
+                new_step_item.setData(Qt.UserRole, new_data)
+                new_step_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+                new_step_item.setToolTip(self._stepper_tooltip(pipe_status))
+                self.table.setItem(row, 9, new_step_item)
+                updated_any = True
+
+        if updated_any:
+            self.table.viewport().update()
+
     # --------------------------------------------------------------- actions
     def _cell_double_clicked(self, row: int, column: int) -> None:
         if column in (1, 3, 4, 5):
@@ -1012,9 +1110,10 @@ class LibraryView(QWidget):
                     config=getattr(self.pipeline, "config", None),
                     parent=self.window() or self,
                 )
-                semi_dlg.changed.connect(self.refresh)
+                semi_dlg.changed.connect(lambda: self.refresh_visible_pipeline_statuses(target_ids))
                 semi_dlg.exec()
-                self.refresh()
+                self.refresh_visible_pipeline_statuses(target_ids)
+                self.data_changed.emit()
             else:
                 self._run_reprocess("incremental", target_doc_ids=target_ids, skip_confirmation=True)
 
@@ -1052,9 +1151,10 @@ class LibraryView(QWidget):
             )
             if mode == "auto" and hasattr(deep_dlg, "tabs"):
                 deep_dlg.tabs.setCurrentIndex(1)
-            deep_dlg.synthesis_completed.connect(lambda d, k: self.refresh())
+            deep_dlg.synthesis_completed.connect(lambda d, k: self.refresh_visible_pipeline_statuses([d] if d else doc_ids))
             deep_dlg.exec()
-            self.refresh()
+            self.refresh_visible_pipeline_statuses(doc_ids)
+            self.data_changed.emit()
 
     def _open_selected_step4_audit(self) -> None:
         from ui.task_scope_dialog import TaskScopeDialog
@@ -1088,7 +1188,8 @@ class LibraryView(QWidget):
                 pipeline=self.pipeline,
             )
             audit_dlg.exec()
-            self.refresh()
+            self.refresh_visible_pipeline_statuses(doc_ids)
+            self.data_changed.emit()
 
     def _open_audit_for_doc(self, doc_id: str) -> None:
         from ui.audit_dialogs import DocumentAuditDialog
@@ -1101,7 +1202,8 @@ class LibraryView(QWidget):
             pipeline=self.pipeline,
         )
         audit_dlg.exec()
-        self.refresh()
+        self.refresh_visible_pipeline_statuses([doc_id])
+        self.data_changed.emit()
 
     def _open_semi_auto_force(self) -> None:
         if self.pipeline is None:
@@ -1139,7 +1241,7 @@ class LibraryView(QWidget):
             )
             dialog_batch.changed.connect(self._on_semi_auto_changed)
             dialog_batch.exec()
-            self.refresh()
+            self.refresh_visible_pipeline_statuses(doc_ids)
             self.data_changed.emit()
 
     def _show_context_menu(self, pos: QPoint) -> None:
@@ -1197,7 +1299,7 @@ class LibraryView(QWidget):
             if reply != QMessageBox.Yes:
                 return
             rollback_pipeline_from_step(self.db, self.workspace, doc_id, 1, qdrant=qdrant)
-            self.refresh()
+            self.refresh_visible_pipeline_statuses([doc_id])
             self._run_reprocess("force")
 
         elif step == 2:
@@ -1211,7 +1313,7 @@ class LibraryView(QWidget):
             if reply != QMessageBox.Yes:
                 return
             rollback_pipeline_from_step(self.db, self.workspace, doc_id, 2, qdrant=qdrant)
-            self.refresh()
+            self.refresh_visible_pipeline_statuses([doc_id])
             self._run_reprocess("force")
 
         elif step == 3:
@@ -1236,9 +1338,10 @@ class LibraryView(QWidget):
                     config=self.config,
                     parent=self,
                 )
-                dialog.changed.connect(self._on_semi_auto_changed)
+                dialog.changed.connect(lambda: self.refresh_visible_pipeline_statuses([doc_id]))
                 dialog.exec()
-                self.refresh()
+                self.refresh_visible_pipeline_statuses([doc_id])
+                self.data_changed.emit()
             else:
                 self._run_reprocess("incremental")
 
@@ -1260,9 +1363,10 @@ class LibraryView(QWidget):
                     config=self.config,
                     parent=self,
                 )
-                dialog.changed.connect(self._on_semi_auto_changed)
+                dialog.changed.connect(lambda: self.refresh_visible_pipeline_statuses([doc_id]))
                 dialog.exec()
-                self.refresh()
+                self.refresh_visible_pipeline_statuses([doc_id])
+                self.data_changed.emit()
 
         elif step == 5:
             cards = self.db.cards_for_document(doc_id)
@@ -1287,12 +1391,13 @@ class LibraryView(QWidget):
                 parent=self,
                 pipeline=self.pipeline,
             )
-            dialog.synthesis_completed.connect(lambda d, k: self.refresh())
+            dialog.synthesis_completed.connect(lambda d, k: self.refresh_visible_pipeline_statuses([doc_id]))
             dialog.exec()
-            self.refresh()
+            self.refresh_visible_pipeline_statuses([doc_id])
+            self.data_changed.emit()
 
     def _on_semi_auto_changed(self) -> None:
-        self.refresh()
+        self.refresh_visible_pipeline_statuses()
         self.data_changed.emit()
 
     def _run_reprocess(
@@ -1390,10 +1495,11 @@ class LibraryView(QWidget):
         self.reprocess_eta.setText(
             self._reprocess_eta.summary(float(fraction), label)
         )
+        self.refresh_visible_pipeline_statuses()
 
     def _reprocess_done(self, result: dict) -> None:
         self._set_reprocess_busy(False)
-        self.refresh()
+        self.refresh_visible_pipeline_statuses()
         self.data_changed.emit()
         metadata = result.get("metadata", {}) if isinstance(result, dict) else {}
         purged = result.get("purged", {}) if isinstance(result, dict) else {}

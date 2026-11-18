@@ -230,3 +230,42 @@
 - 全工程 **219 个测试全部通过 (100% passed)**；
 - 代码已同步热更新至 `C:\Normal Program Files\AtomicCalculationDB\` 和 `dist\`；
 - 本地重新打包更新了 `release/AtomicCalculationDB_Patch_v3.0.1.zip` 与 `release/AtomicCalculationDB_Lite_v3.0.1.zip`。
+
+---
+
+## 10. 文献列表流程进度与状态就地自动刷新机制（保持原有排序完全不动）
+
+### 10.1 故障现象与用户诉求
+在实际使用中，文献在半自动提问包写入知识库、OCR 解析完成或深度归纳完毕后，主界面文献清单中的“流程进度”栏未实时反映出最新完成状态，需要用户手动触发刷新。然而，若直接调用原有的全表重载方法（`self.refresh()`），因为底层默认按照修改时间 `updated_at DESC` 执行 SQL 查询，刚被更新的文献其时间戳发生变化，会瞬间跳跃到第 1 页第 1 行，导致用户当前阅读和筛选的文献排位完全被篡改，丢失操作上下文。用户明确要求：
+> “里面的文献处理完了，但是流程进度还没有变，其实是没有刷新，我希望自动刷新一下。但是刷新只刷新流程进度这一栏，不要改变文献清单的原有排序。”
+
+### 10.2 根因定位与架构缺陷
+1. **原 `refresh()` 机制具有破坏性**：`refresh()` 包含 `self.table.setRowCount(0)`，会清空整个表格并重新自 SQLite 查询。当文献属性更新后重查，行顺序必定发生变化，滚动条与当前页码也会受到重置干扰；
+2. **`MainWindow._refresh_all` 形成反射冲刷**：当子视图向外发射 `data_changed` 广播全局数据变动时，`MainWindow._refresh_all` 遍历调用所有视图的 `refresh()`，导致 `LibraryView` 自己发出的信号反过来把自身当前的视图排版重置；
+3. **缺乏颗粒度细致的就地更新函数**：在多步流水线中，文献行只需针对“流程进度”、“解析状态”、“Token 统计”进行原地重绘，无需重新排布表格行。
+
+### 10.3 核心技术方案与实现
+1. **就地局部状态刷新算法（`refresh_visible_pipeline_statuses`）**：
+   - 在 `app_core/ui/views/library.py` 中新增专用方法 `refresh_visible_pipeline_statuses(self, doc_ids: Iterable[str] | None = None) -> None`；
+   - 算法逐行扫描当前表格已有行（`0` 到 `table.rowCount()`），根据第 0 列的 `doc_id` 从数据库获取最新文档信息；
+   - **仅就地更新变动单元格**：
+     - **第 6 列（Tokens）**：对比后原地更新输入/输出计数；
+     - **第 7 列（下载状态）**：原地更新文本与颜色；
+     - **第 8 列（解析状态）**：原地更新“待解析/待提炼/已解析/需要 OCR”标签；
+     - **第 9 列（流程进度）**：动态计算最新的 `DocumentPipelineStatus` 并存入 `Qt.UserRole`，更新 Tooltip；
+   - 触发 `table.viewport().update()` 驱动局部高效硬件加速重绘，**不插入、不删除、不重排任何行，表格顺序、选区、分页与滚动位置 100% 稳如磐石**。
+2. **全流程弹窗与子任务即时联动**：
+   - `SemiAutoBatchDialog` 在解析完成（`_on_parse_done`）、提问包生成（`_generate`）、回复导入通过（`_apply_reply`）、单包删除（`_delete_batch`）、任务清空（`_clear`）、入库完成（`finalize_run`）等全生命周期均发射 `changed` 信号；
+   - `LibraryView` 在接收到弹窗变动或弹窗关闭时，一律调用 `refresh_visible_pipeline_statuses(target_ids)` 原位刷新，彻底废弃引发跳排的 `self.refresh()`；
+   - 深度归纳弹窗（`DeepSynthesisDialog`）、校对核查弹窗（`DocumentAuditDialog`）同理接入原地更新。
+3. **后台常驻轻量自动侦测器**：
+   - 在 `LibraryView` 内嵌一个 2.5 秒周期的轻量定时器 `_auto_refresh_timer`，在窗口处于可见状态（`self.isVisible()`）时自动调用 `refresh_visible_pipeline_statuses()`；
+   - 辅以 `showEvent` 事件钩子，用户只要切回文献库标签页，毫秒级即可看到最新的绿色流水线进度，无需任何手动点击。
+4. **主窗口回环阻断（`MainWindow._refresh_all`）**：
+   - 增加发射者过滤 `if sender is not None and view is sender: continue`，当文献库通知其他视图（如探索页、夜间任务页）同步数据时，文献库自身的表格排布不受波及。
+
+### 10.4 验证与交付
+- 在 `tests/test_v301.py` 中新增针对性测试 `test_library_refresh_visible_pipeline_statuses_in_place_preserves_order`，严格验证在文档更新时间被提前后，在位刷新能够成功点亮第 4 步绿光，且整表行排序依然精准保留初始的 `DOC-CCC -> DOC-BBB -> DOC-AAA`；
+- 全工程 **220 个测试全部通过 (100% passed)**；
+- 代码已同步更新至 `C:\Normal Program Files\AtomicCalculationDB\` 及 `dist\`；
+- 按照 Z 版本补丁规范，本地生成最新版 `release/AtomicCalculationDB_Patch_v3.0.1.zip` 与 `release/AtomicCalculationDB_Lite_v3.0.1.zip`。

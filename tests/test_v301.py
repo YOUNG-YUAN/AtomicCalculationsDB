@@ -386,5 +386,64 @@ def test_stepper_semi_auto_progress_override():
     assert st_partial.current_step == 3
 
 
+def test_library_refresh_visible_pipeline_statuses_in_place_preserves_order(tmp_path, qapp):
+    from unittest.mock import MagicMock
+    from PySide6.QtCore import Qt
+    from db.sqlite_manager import SQLiteManager
+    from app_core.ui.views.library import LibraryView
+
+    db = SQLiteManager(tmp_path)
+    # Insert 3 docs with distinct updated_at timestamps
+    doc_a = db.upsert_document({"doc_id": "DOC-PAP-2026-000001", "title": "Doc A", "download_status": "DOWNLOADED", "parse_status": "PENDING"})
+    doc_b = db.upsert_document({"doc_id": "DOC-PAP-2026-000002", "title": "Doc B", "download_status": "DOWNLOADED", "parse_status": "PENDING"})
+    doc_c = db.upsert_document({"doc_id": "DOC-PAP-2026-000003", "title": "Doc C", "download_status": "DOWNLOADED", "parse_status": "PENDING"})
+
+    # Manually space out updated_at so order is CCC, BBB, AAA
+    with db._lock:
+        db.conn.execute("UPDATE documents SET updated_at = '2026-01-01 10:00:00' WHERE doc_id = 'DOC-PAP-2026-000001'")
+        db.conn.execute("UPDATE documents SET updated_at = '2026-01-01 11:00:00' WHERE doc_id = 'DOC-PAP-2026-000002'")
+        db.conn.execute("UPDATE documents SET updated_at = '2026-01-01 12:00:00' WHERE doc_id = 'DOC-PAP-2026-000003'")
+
+    lib = LibraryView(db=db, fetcher=MagicMock(), workspace=str(tmp_path))
+    lib.refresh()
+
+    assert lib.table.rowCount() == 3
+    # Initial order: CCC, BBB, AAA
+    assert lib.table.item(0, 0).data(Qt.UserRole) == "DOC-PAP-2026-000003"
+    assert lib.table.item(1, 0).data(Qt.UserRole) == "DOC-PAP-2026-000002"
+    assert lib.table.item(2, 0).data(Qt.UserRole) == "DOC-PAP-2026-000001"
+
+    # Now DOC-PAP-2026-000001 is processed: updated_at becomes highest, cards written, parse_status LLM_EXTRACTED
+    with db._lock:
+        db.conn.execute(
+            "UPDATE documents SET updated_at = '2026-01-01 13:00:00', parse_status = 'LLM_EXTRACTED', "
+            "card_count = 10, input_tokens = 5000, output_tokens = 1200 WHERE doc_id = 'DOC-PAP-2026-000001'"
+        )
+
+    # In-place refresh must update DOC-PAP-2026-000001's progress without moving it to the top!
+    lib.refresh_visible_pipeline_statuses(["DOC-PAP-2026-000001"])
+
+    # Table order MUST BE 100% UNCHANGED
+    assert lib.table.item(0, 0).data(Qt.UserRole) == "DOC-PAP-2026-000003"
+    assert lib.table.item(1, 0).data(Qt.UserRole) == "DOC-PAP-2026-000002"
+    assert lib.table.item(2, 0).data(Qt.UserRole) == "DOC-PAP-2026-000001"
+
+    # Row 2 (DOC-AAA) Column 9 (stepper) must be updated to Step 4 completed & GREEN glow
+    step_data = lib.table.item(2, 9).data(Qt.UserRole)
+    assert isinstance(step_data, dict)
+    assert step_data["glow"] == "GREEN"
+    assert step_data["steps"][3]["status"] == "COMPLETED"
+
+    # Row 2 Column 6 (tokens) must be updated
+    assert "入: 5,000" in lib.table.item(2, 6).text()
+    assert "出: 1,200" in lib.table.item(2, 6).text()
+
+    # Row 2 Column 8 (parse) must be updated
+    assert "已解析" in lib.table.item(2, 8).text()
+
+    lib.close()
+
+
+
 
 

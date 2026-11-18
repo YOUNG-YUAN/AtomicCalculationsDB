@@ -443,6 +443,7 @@ class SemiAutoBatchDialog(QDialog):
             )
         self._render()
         self.generate_button.setEnabled(bool(bundles))
+        self.changed.emit()
 
     def _on_parse_failed(self, message: str) -> None:
         self.parse_progress.setVisible(False)
@@ -520,6 +521,7 @@ class SemiAutoBatchDialog(QDialog):
             )
         )
         self._render()
+        self.changed.emit()
 
     def _copy_prompt(self, batch: dict[str, Any]) -> None:
         if not self.manifest:
@@ -634,6 +636,7 @@ class SemiAutoBatchDialog(QDialog):
             )
         self.status_label.setText(message)
         self._render()
+        self.changed.emit()
 
     def _delete_batch(self, batch: dict[str, Any]) -> None:
         if not self.manifest:
@@ -660,6 +663,7 @@ class SemiAutoBatchDialog(QDialog):
                 f"{len(self.manifest.get('batches') or [])} 个提问包。"
             )
         self._render()
+        self.changed.emit()
 
     def _clear(self) -> None:
         if not self.manifest:
@@ -678,6 +682,7 @@ class SemiAutoBatchDialog(QDialog):
         self.manifest = None
         self.status_label.setText("任务包已清空。")
         self._render()
+        self.changed.emit()
 
     def _finalize(self) -> None:
         if not self.manifest:
