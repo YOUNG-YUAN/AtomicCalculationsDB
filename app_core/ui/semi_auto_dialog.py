@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
+    QInputDialog,
     QLabel,
     QMessageBox,
     QPushButton,
@@ -39,6 +40,7 @@ from models.semi_auto import (
     finalize_run,
     find_unfinished_run,
     import_reply,
+    list_runs,
     read_prompt,
     semi_auto_root,
 )
@@ -170,6 +172,14 @@ class SemiAutoBatchDialog(QDialog):
             and str(self.manifest.get("mode") or "").lower() != self.mode
         ):
             self.manifest = None
+        if self.manifest and self.manifest.get("documents"):
+            manifest_doc_ids = [
+                str(item.get("doc_id") or "")
+                for item in self.manifest["documents"]
+                if isinstance(item, dict) and item.get("doc_id")
+            ]
+            if manifest_doc_ids:
+                self.doc_ids = manifest_doc_ids
         self._parse_worker: ParseWorker | None = None
         self.setWindowTitle("网页 AI 半自动提炼")
         self.resize(1200, 880)
@@ -282,6 +292,11 @@ class SemiAutoBatchDialog(QDialog):
         self.open_dir_button.setObjectName("Ghost")
         self.open_dir_button.clicked.connect(self._open_dir)
         controls.addWidget(self.open_dir_button)
+        self.switch_run_button = QPushButton("🔄 恢复/切换未完成任务包")
+        self.switch_run_button.setObjectName("Pill")
+        self.switch_run_button.setToolTip("查看或切换当前工作区中的未完成任务包")
+        self.switch_run_button.clicked.connect(self._switch_run)
+        controls.addWidget(self.switch_run_button)
         self.clear_button = QPushButton("🗑 清空/删除已生成提问包")
         self.clear_button.setObjectName("Ghost")
         self.clear_button.clicked.connect(self._clear)
@@ -758,6 +773,64 @@ class SemiAutoBatchDialog(QDialog):
         path = semi_auto_root(self.workspace) / str(self.manifest["run_id"])
         path.mkdir(parents=True, exist_ok=True)
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+
+    def _switch_run(self) -> None:
+        runs = list_runs(self.workspace)
+        unfinished = [
+            r for r in runs
+            if str(r.get("status") or "").upper() != "FINALIZED"
+        ]
+        if not unfinished:
+            QMessageBox.information(
+                self, "没有未完成任务包", "当前工作区暂无未完成的网页 AI 半自动任务包。"
+            )
+            return
+
+        items = []
+        mapping = {}
+        for r in unfinished:
+            rid = str(r.get("run_id") or "")
+            docs = r.get("documents") or []
+            batches = r.get("batches") or []
+            imported = sum(1 for b in batches if str(b.get("status")).upper() == "IMPORTED")
+            doc_str = "、".join(str(d.get("doc_id") or "") for d in docs[:3])
+            if len(docs) > 3:
+                doc_str += f" 等 {len(docs)} 篇"
+            label = f"{rid} ({doc_str} · {len(batches)} 份提问包 · 已导入 {imported}/{len(batches)})"
+            items.append(label)
+            mapping[label] = r
+
+        chosen, ok = QInputDialog.getItem(
+            self,
+            "选择未完成任务包",
+            "请选择要切换并恢复的任务包：",
+            items,
+            0,
+            False,
+        )
+        if not ok or not chosen:
+            return
+
+        target_run = mapping[chosen]
+        self.manifest = target_run
+        if self.manifest.get("documents"):
+            manifest_doc_ids = [
+                str(item.get("doc_id") or "")
+                for item in self.manifest["documents"]
+                if isinstance(item, dict) and item.get("doc_id")
+            ]
+            if manifest_doc_ids:
+                self.doc_ids = manifest_doc_ids
+
+        self._populate_doc_table()
+        if self.manifest.get("max_batch_tokens"):
+            try:
+                self.budget.setValue(int(self.manifest["max_batch_tokens"]))
+            except Exception:
+                pass
+        self.status_label.setText(f"已恢复任务包 {self.manifest.get('run_id')}。")
+        self._render()
+        self.changed.emit()
 
     # --------------------------------------------------------------- rendering
     def _populate_doc_table(self) -> None:

@@ -102,21 +102,52 @@ def list_runs(workspace: str | Path) -> list[dict[str, Any]]:
 
 
 def find_unfinished_run(
-    workspace: str | Path, doc_ids: Iterable[str]
+    workspace: str | Path, doc_ids: Iterable[str] | None = None
 ) -> dict[str, Any] | None:
-    wanted = {str(item).upper() for item in doc_ids if item}
-    for manifest in list_runs(workspace):
-        if str(manifest.get("status") or "").upper() == "FINALIZED":
-            continue
-        documents = manifest.get("documents") or []
-        actual = {
-            str(item.get("doc_id") or "").upper()
-            for item in documents
-            if isinstance(item, Mapping)
-        }
-        if actual == wanted:
-            return manifest
-    return None
+    wanted = {str(item).upper() for item in (doc_ids or []) if item}
+    unfinished = [
+        manifest
+        for manifest in list_runs(workspace)
+        if str(manifest.get("status") or "").upper() != "FINALIZED"
+    ]
+    if not unfinished:
+        return None
+
+    if wanted:
+        # 1. 优先：文献集合完全匹配（精准命中）
+        for manifest in unfinished:
+            documents = manifest.get("documents") or []
+            actual = {
+                str(item.get("doc_id") or "").upper()
+                for item in documents
+                if isinstance(item, Mapping)
+            }
+            if actual == wanted:
+                return manifest
+
+        # 2. 次优：目标文献为未完成任务包文献的子集（如从单篇文献详情页打开，或文库部分选中打开）
+        for manifest in unfinished:
+            documents = manifest.get("documents") or []
+            actual = {
+                str(item.get("doc_id") or "").upper()
+                for item in documents
+                if isinstance(item, Mapping)
+            }
+            if wanted.issubset(actual):
+                return manifest
+
+        # 3. 兜底：目标文献与未完成任务包有交集
+        for manifest in unfinished:
+            documents = manifest.get("documents") or []
+            actual = {
+                str(item.get("doc_id") or "").upper()
+                for item in documents
+                if isinstance(item, Mapping)
+            }
+            if wanted & actual:
+                return manifest
+
+    return unfinished[0] if not wanted else None
 
 
 def _bundle_path(workspace: Path, document: Mapping[str, Any]) -> Path:
