@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import Qt, QUrl, Signal
+from PySide6.QtCore import QEvent, Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QGuiApplication
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -182,6 +182,11 @@ class SemiAutoBatchDialog(QDialog):
                 self.doc_ids = manifest_doc_ids
         self._parse_worker: ParseWorker | None = None
         self.setWindowTitle("网页 AI 半自动提炼")
+        self.setWindowFlags(
+            Qt.Window
+            | Qt.WindowMinMaxButtonsHint
+            | Qt.WindowCloseButtonHint
+        )
         self.resize(1200, 880)
         self.setMinimumSize(960, 640)
 
@@ -1058,6 +1063,23 @@ class SemiAutoBatchDialog(QDialog):
         else:
             self.stepper.setVisible(False)
             self.step5_button.setVisible(False)
+
+    def changeEvent(self, event: QEvent) -> None:  # noqa: N802
+        super().changeEvent(event)
+        if event.type() == QEvent.WindowStateChange:
+            parent = self.parent()
+            if parent is not None:
+                top = parent.window() if hasattr(parent, "window") else parent
+                try:
+                    import sys
+                    if sys.platform == "win32":
+                        import ctypes
+                        ctypes.windll.user32.EnableWindow(
+                            int(top.winId()),
+                            1 if self.isMinimized() else 0,
+                        )
+                except Exception:
+                    pass
 
     def _open_step5_deep(self) -> None:
         if len(self.doc_ids) != 1:

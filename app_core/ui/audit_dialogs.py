@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import Qt, QUrl
+from PySide6.QtCore import QEvent, Qt, QUrl
 from PySide6.QtGui import QDesktopServices, QGuiApplication
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -354,6 +354,11 @@ class DocumentAuditDialog(QDialog):
         self._export_result: Any = None
 
         self.setWindowTitle(f"文献 [{self.doc_id}] AI 校对工作台 · 第 ④ 步 (审稿与延拓审核)")
+        self.setWindowFlags(
+            Qt.Window
+            | Qt.WindowMinMaxButtonsHint
+            | Qt.WindowCloseButtonHint
+        )
         self.resize(780, 560)
         self.setMinimumSize(660, 460)
 
@@ -545,6 +550,23 @@ class DocumentAuditDialog(QDialog):
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(res.export_dir)))
         except Exception as exc:
             QMessageBox.warning(self, "打开文件夹失败", str(exc))
+
+    def changeEvent(self, event: QEvent) -> None:  # noqa: N802
+        super().changeEvent(event)
+        if event.type() == QEvent.WindowStateChange:
+            parent = self.parent()
+            if parent is not None:
+                top = parent.window() if hasattr(parent, "window") else parent
+                try:
+                    import sys
+                    if sys.platform == "win32":
+                        import ctypes
+                        ctypes.windll.user32.EnableWindow(
+                            int(top.winId()),
+                            1 if self.isMinimized() else 0,
+                        )
+                except Exception:
+                    pass
 
     def _open_import_dialog(self) -> None:
         dialog = AuditImportDialog(

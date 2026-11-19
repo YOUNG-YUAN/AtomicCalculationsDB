@@ -80,11 +80,36 @@
 
 ---
 
-## 5. 验证与交付
+## 5. 工作台窗口控件规格化（增加最小化、全屏/最大化与关闭按钮，解决主页面移动受阻问题）
+
+### 5.1 现象与需求
+- 用户反馈：半自动提炼工作台（`SemiAutoBatchDialog`）尺寸较大（1200x880），默认作为 `QDialog` 弹窗在 Windows 下仅有右上角的 `[×]` 关闭按钮，缺乏最小化与全屏控件；
+- 用户在提炼过程中需要频繁与网页端大模型配合（复制提问包、前往浏览器粘贴问答），有时需要移动或查阅被遮挡的主页面；
+- 但由于提炼窗口浮在主页面上层且无最小化按钮，用户无法将窗口缩至任务栏以腾出空间操作移动主窗口。
+
+### 5.2 解决方案
+1. **注入标准原生顶层窗口标志**：
+   - 在 `SemiAutoBatchDialog`、`DeepSynthesisDialog`（第 ⑤ 步深度归纳工作台）及 `DocumentAuditDialog`（第 ④ 步校对工作台）的 `__init__` 中显式设置：
+     ```python
+     self.setWindowFlags(
+         Qt.Window
+         | Qt.WindowMinMaxButtonsHint
+         | Qt.WindowCloseButtonHint
+     )
+     ```
+   - 在 Windows 系统下原生渲染完整的 `[-]` 最小化、`[□]` 最大化/全屏切换及 `[×]` 关闭三大控制按钮。
+2. **最小化时主窗体动态解锁**：
+   - 重写 `changeEvent(event)`，在监听到 `QEvent.WindowStateChange` 且窗口被最小化时，通过 Windows API 动态解除对顶层父窗口（主界面）的禁用锁定状态；
+   - 用户将工作台最小化后，可自由点击、拖拽移动或查阅底层主界面；当用户从任务栏还原工作台时，自动恢复模态上下文。
+
+---
+
+## 6. 验证与交付
 
 1. **测试套件**：
-   - 新增 `tests/test_v304.py`，完整覆盖精准匹配、单篇子集匹配、部分选中匹配、交集匹配、无参数匹配、物理理论模型名称过滤，以及 `_set_reprocess_busy` 源码安全断言；
-   - 运行全量测试套件，**234 个测试全部通过（100% Passed）**。
+   - 新增 `tests/test_v304.py`，完整覆盖精准匹配、单篇子集匹配、部分选中匹配、交集匹配、无参数匹配、物理理论模型名称过滤、`_set_reprocess_busy` 源码安全断言，以及三大工作台窗口控件标志与最小化事件测试；
+   - 运行全量测试套件，**235 个测试全部通过（100% Passed）**。
 2. **打包与部署**：
    - 同步 `app_core` 至 `C:\Normal Program Files\AtomicCalculationDB\` 及 `dist\`；
    - 更新本地构建包 `release/AtomicCalculationDB_Patch_v3.0.4.zip` 与 `release/AtomicCalculationDB_Lite_v3.0.4.zip`。
+

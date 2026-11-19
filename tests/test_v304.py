@@ -104,3 +104,48 @@ def test_library_view_set_reprocess_busy():
     source = inspect.getsource(LibraryView._set_reprocess_busy)
     assert "step3_semi_button" not in source
 
+
+def test_dialog_window_controls_and_minmax_flags(qapp, tmp_path):
+    from PySide6.QtCore import Qt, QEvent
+    from PySide6.QtWidgets import QWidget
+    from ui.semi_auto_dialog import SemiAutoBatchDialog
+    from ui.deep_synthesis_dialog import DeepSynthesisDialog
+    from ui.audit_dialogs import DocumentAuditDialog
+
+    parent = QWidget()
+
+    # 1. SemiAutoBatchDialog
+    semi = SemiAutoBatchDialog(None, tmp_path, None, [], parent=parent)
+    flags = semi.windowFlags()
+    assert bool(flags & Qt.Window)
+    assert bool(flags & Qt.WindowMinimizeButtonHint)
+    assert bool(flags & Qt.WindowMaximizeButtonHint)
+    assert bool(flags & Qt.WindowCloseButtonHint)
+
+    # Test changeEvent execution
+    evt = QEvent(QEvent.WindowStateChange)
+    semi.changeEvent(evt)
+    semi.close()
+
+    # 2. DeepSynthesisDialog
+    deep = DeepSynthesisDialog(None, tmp_path, "DOC-1", parent=parent)
+    flags = deep.windowFlags()
+    assert bool(flags & Qt.Window)
+    assert bool(flags & Qt.WindowMinimizeButtonHint)
+    assert bool(flags & Qt.WindowMaximizeButtonHint)
+    assert bool(flags & Qt.WindowCloseButtonHint)
+    deep.changeEvent(evt)
+    deep.close()
+
+    # 3. DocumentAuditDialog
+    audit = DocumentAuditDialog(None, tmp_path, "DOC-1", parent=parent)
+    flags = audit.windowFlags()
+    assert bool(flags & Qt.Window)
+    assert bool(flags & Qt.WindowMinimizeButtonHint)
+    assert bool(flags & Qt.WindowMaximizeButtonHint)
+    assert bool(flags & Qt.WindowCloseButtonHint)
+    audit.changeEvent(evt)
+    audit.close()
+    parent.close()
+
+

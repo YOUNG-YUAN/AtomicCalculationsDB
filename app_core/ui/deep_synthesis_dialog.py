@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtCore import QEvent, Qt, QThread, Signal
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -95,6 +95,11 @@ class DeepSynthesisDialog(QDialog):
         self._codex_worker: CodexWorker | None = None
 
         self.setWindowTitle(f"文献 [{self.doc_id}] 深度归纳工作台 · 进阶第 ⑤ 步 (冒金光)")
+        self.setWindowFlags(
+            Qt.Window
+            | Qt.WindowMinMaxButtonsHint
+            | Qt.WindowCloseButtonHint
+        )
         self.resize(760, 620)
         self.setMinimumSize(640, 500)
 
@@ -378,6 +383,23 @@ class DeepSynthesisDialog(QDialog):
         self._codex_worker.finished_signal.connect(self._on_codex_success)
         self._codex_worker.error_signal.connect(self._on_codex_failed)
         self._codex_worker.start()
+
+    def changeEvent(self, event: QEvent) -> None:  # noqa: N802
+        super().changeEvent(event)
+        if event.type() == QEvent.WindowStateChange:
+            parent = self.parent()
+            if parent is not None:
+                top = parent.window() if hasattr(parent, "window") else parent
+                try:
+                    import sys
+                    if sys.platform == "win32":
+                        import ctypes
+                        ctypes.windll.user32.EnableWindow(
+                            int(top.winId()),
+                            1 if self.isMinimized() else 0,
+                        )
+                except Exception:
+                    pass
 
     def _on_codex_success(self, res: dict) -> None:
         self.codex_progress.setVisible(False)
