@@ -1260,14 +1260,8 @@ class LibraryView(QWidget):
         menu.addAction("✨ 第 ⑤ 步：启动 AI 深度归纳", lambda: self._run_step_from_menu(doc_id, 5))
         menu.addSeparator()
         menu.addAction("📄 打开文献详情工作台", lambda: self.open_document.emit(doc_id))
-        menu.addAction("🔍 智能校准元数据 (MinerU/OCR)", lambda: self._calibrate_metadata_for_docs([doc_id]))
+        menu.addAction("📖 导入BibTex自动更新文献信息", lambda: self._import_bibtex_for_doc(doc_id))
         menu.addAction("✏️ 编辑文献信息", lambda: self._edit_metadata_for_doc(doc_id))
-        selected_ids = self._selected_doc_ids() or [doc_id]
-        if len(selected_ids) > 1:
-            menu.addAction(
-                f"🔍 批量智能校准元数据 ({len(selected_ids)} 篇)",
-                lambda docs=selected_ids: self._calibrate_metadata_for_docs(docs),
-            )
 
         user_collections = self.db.list_collections()
         if user_collections:
@@ -1607,70 +1601,18 @@ class LibraryView(QWidget):
             self.refresh()
             self.data_changed.emit()
 
-    def _calibrate_metadata_for_docs(self, doc_ids: list[str]) -> None:
-        if not doc_ids:
+    def _import_bibtex_for_doc(self, doc_id: str) -> None:
+        document = self.db.get_document(doc_id)
+        if not document:
+            self.toast.emit(f"找不到文献：{doc_id}")
             return
-        from parser.metadata_extractor import extract_metadata_for_document, is_valid_title
-        from ui.dialogs import MetadataDiffDialog
+        from ui.dialogs import BibtexImportDialog
 
-        if len(doc_ids) == 1:
-            doc_id = doc_ids[0]
-            doc = self.db.get_document(doc_id)
-            if not doc:
-                self.toast.emit(f"找不到文献：{doc_id}")
-                return
-            candidate = extract_metadata_for_document(self.db, self.workspace, doc_id, allow_network=True)
-            dlg = MetadataDiffDialog(doc, candidate, parent=self.window() or self)
-            if dlg.exec() == QDialog.Accepted:
-                updates = dlg.get_selected_updates()
-                if updates and len(updates) > 1:
-                    self.db.upsert_document(updates)
-                    self.toast.emit(f"文献 [{doc_id}] 元数据已成功校准！")
-                    self.refresh()
-                    self.data_changed.emit()
-                else:
-                    self.toast.emit("未选择任何需要校准的字段")
-            return
-
-        # Batch calibration confirmation
-        reply = QMessageBox.question(
-            self,
-            "批量智能校准元数据",
-            f"确定要对选中的 {len(doc_ids)} 篇文献执行元数据智能校准吗？\n\n"
-            f"系统将优先提取 MinerU Markdown 结构化文本及官方 DOI 信息自动修正错误字段。",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.Yes,
-        )
-        if reply != QMessageBox.Yes:
-            return
-
-        repaired_count = 0
-        for did in doc_ids:
-            doc = self.db.get_document(did)
-            if not doc:
-                continue
-            try:
-                candidate = extract_metadata_for_document(self.db, self.workspace, did, allow_network=True)
-                updates: dict[str, Any] = {"doc_id": did}
-                if candidate.title and is_valid_title(candidate.title) and candidate.title != doc.get("title"):
-                    updates["title"] = candidate.title
-                if candidate.year and candidate.year != doc.get("pub_year"):
-                    updates["pub_year"] = candidate.year
-                if candidate.journal and candidate.journal != doc.get("journal"):
-                    updates["journal"] = candidate.journal
-                if candidate.authors and candidate.authors != (doc.get("authors_list") or []):
-                    updates["authors"] = candidate.authors
-                if candidate.doi and candidate.doi != doc.get("doi"):
-                    updates["doi"] = candidate.doi
-                if len(updates) > 1:
-                    self.db.upsert_document(updates)
-                    repaired_count += 1
-            except Exception as exc:
-                logger.warning("Batch metadata calibration failed for %s: %s", did, exc)
-
-        self.toast.emit(f"批量校准完成：已更新 {repaired_count} / {len(doc_ids)} 篇文献")
-        self.refresh()
-        self.data_changed.emit()
+        dlg = BibtexImportDialog(self.db, document, parent=self.window() or self)
+        if dlg.exec() == QDialog.Accepted:
+            self.toast.emit(f"文献 [{doc_id}] 已成功从 BibTeX 更新信息")
+            self.refresh()
+            self.data_changed.emit()
 
     def _discover(self) -> None:
         query = self.query_edit.text().strip()

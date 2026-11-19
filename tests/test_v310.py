@@ -1,6 +1,6 @@
 """Unit tests for v3.1.0:
-- Metadata auto-calibration from MinerU Markdown (clean_publisher_banners, extract_metadata_from_markdown, extract_metadata_for_document)
-- Elimination of false metadata (e.g. IOP download banner year 2015 and "science" journal)
+- BibTeX import and metadata extraction (parse_bibtex_text, parse_bibtex_file, bibtex_to_metadata)
+- BibtexImportDialog for file selection or text pasting
 - DocumentEditDialog with read-only DOC-ID and full field modification
 - MetadataDiffDialog for smart diff comparison and selective calibration
 - LibraryView table edit triggers set to NoEditTriggers to prevent accidental cell editing on detail close
@@ -11,18 +11,18 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 import pytest
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QAbstractItemView, QApplication
+from PySide6.QtWidgets import QAbstractItemView, QApplication, QDialog
 
-from unittest.mock import MagicMock
 from db.sqlite_manager import SQLiteManager
 from parser.metadata_extractor import (
-    clean_publisher_banners,
-    extract_metadata_for_document,
-    extract_metadata_from_markdown,
+    bibtex_to_metadata,
+    parse_bibtex_file,
+    parse_bibtex_text,
 )
-from ui.dialogs import DocumentEditDialog, MetadataDiffDialog
+from ui.dialogs import BibtexImportDialog, DocumentEditDialog, MetadataDiffDialog
 from ui.views.library import LibraryView
 
 
@@ -42,120 +42,135 @@ def test_v310_version_json():
     assert data.get("build") == "20261119"
 
 
-def test_clean_publisher_banners():
-    sample_text = """Home Search Collections Journals About Contact us My IOPscience
-## Some Title
-This content has been downloaded from IOPscience. Please scroll down to see the full text.
-# 1982 J. Phys. B: At. Mol. Phys. 15 1319
-Download details:
-IP Address: 142.103.160.110 This content was downloaded on 06/09/2015 at 21:58
-Please note that terms and conditions apply.
-Printed in Great Britain
-Real content starts here
-"""
-    cleaned = clean_publisher_banners(sample_text)
-    assert not any("download details" in line.lower() for line in cleaned)
-    assert not any("downloaded on" in line.lower() for line in cleaned)
-    assert not any("iopscience" in line.lower() for line in cleaned)
-    assert any("1982 J. Phys. B" in line for line in cleaned)
-    assert "Real content starts here" in cleaned
+def test_parse_bibtex_text():
+    sample_bib = """
+    @article{pyper1982analysis,
+      title={Analysis of fine-structure excitation energies in Dirac-Fock and perturbation theories},
+      author={Pyper, N. C. and Rose, S. J. and Grant, I. P.},
+      journal={Journal of Physics B: Atomic and Molecular Physics},
+      volume={15},
+      number={9},
+      pages={1319},
+      year={1982},
+      publisher={IOP Publishing},
+      doi={10.1088/0022-3700/15/9/009}
+    }
+
+    @book{grant2007relativistic,
+      title = "Relativistic Quantum Theory of Atoms and Molecules: Theory and Computation",
+      author = "Grant, Ian P.",
+      year = "2007",
+      publisher = "Springer Science & Business Media",
+      isbn = "9780387346717"
+    }
+
+    @manual{mcdf_manual,
+      title = {GRASP2K User Manual},
+      author = {Jonsson, P. and Gaigalas, G.},
+      year = {2013}
+    }
+    """
+    entries = parse_bibtex_text(sample_bib)
+    assert len(entries) == 3
+
+    # Entry 1: Article (PAP)
+    e1 = entries[0]
+    assert e1["cite_key"] == "pyper1982analysis"
+    assert e1["doc_type"] == "PAP"
+    assert e1["title"] == "Analysis of fine-structure excitation energies in Dirac-Fock and perturbation theories"
+    assert e1["pub_year"] == 1982
+    assert e1["journal"] == "Journal of Physics B: Atomic and Molecular Physics"
+    assert e1["doi"] == "10.1088/0022-3700/15/9/009"
+    assert e1["authors"] == ["N. C. Pyper", "S. J. Rose", "I. P. Grant"]
+
+    # Entry 2: Book (BOK)
+    e2 = entries[1]
+    assert e2["cite_key"] == "grant2007relativistic"
+    assert e2["doc_type"] == "BOK"
+    assert e2["title"] == "Relativistic Quantum Theory of Atoms and Molecules: Theory and Computation"
+    assert e2["pub_year"] == 2007
+    assert e2["authors"] == ["Ian P. Grant"]
+
+    # Entry 3: Manual (MAN)
+    e3 = entries[2]
+    assert e3["doc_type"] == "MAN"
+    assert e3["title"] == "GRASP2K User Manual"
+    assert e3["pub_year"] == 2013
 
 
-def test_extract_metadata_from_markdown_iop_pyper1982():
-    # Simulates MinerU parsed.md of DOC-PAP-0000-3D72D4
-    md = """Home Search Collections Journals About Contact us My IOPscience
-
-## Analysis of fine-structure excitation energies in Dirac-Fock and perturbation theories
-
-This content has been downloaded from IOPscience. Please scroll down to see the full text.
-
-# 1982 J. Phys. B: At. Mol. Phys. 15 1319
-
-(http://iopscience.iop.org/0022-3700/15/9/009)
-
-View the table of contents for this issue, or go to the journal homepage for more
-
-Download details:
-
-IP Address: 142.103.160.110 This content was downloaded on 06/09/2015 at 21:58
-
-Please note that terms and conditions apply.
-
-J. Phys. B: At. Mol. Phys. 15 (1982) 1319-1331. Printed in Great Britain
-
-# Analysis of fine-structure excitation energies in Dirac-Fock and perturbation theories
-
-N C Pyper?, S J Rose+ and I P Grant§
-
-Department of Theoretical Chemistry, University Chemical Laboratory, Lensfield Road, Cambridge CB2 lEW, England
-
-Received 19 March 1981, in final form 25 January 1982
-
-Abstract, This paper compares total fine structure and its components predicted by Dirac-Fock calculations...
-"""
-    meta = extract_metadata_from_markdown(md, filename="pyper1982.pdf", allow_network=False)
-    assert meta.title == "Analysis of fine-structure excitation energies in Dirac-Fock and perturbation theories"
-    # Year must be 1982 (publication year), NEVER 2015 (download year)
-    assert meta.year == 1982
-    # Journal must be J. Phys. B, NEVER "science"
-    assert "J. Phys. B" in meta.journal
-    assert "science" != meta.journal.lower()
-    # Authors correctly parsed
-    assert meta.authors == ["N C Pyper", "S J Rose", "I P Grant"]
-    # DOI deduced from IOP URL
-    assert meta.doi == "10.1088/0022-3700/15/9/009"
+def test_parse_bibtex_file(tmp_path):
+    bib_file = tmp_path / "references.bib"
+    bib_file.write_text(
+        "@article{test2024,\n"
+        "  title = {Atomic Physics in BibTeX},\n"
+        "  author = {Smith, John and Doe, Jane},\n"
+        "  journal = {Physical Review A},\n"
+        "  year = {2024},\n"
+        "  doi = {https://doi.org/10.1103/PhysRevA.100.012345}\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    entries = parse_bibtex_file(bib_file)
+    assert len(entries) == 1
+    assert entries[0]["title"] == "Atomic Physics in BibTeX"
+    assert entries[0]["authors"] == ["John Smith", "Jane Doe"]
+    assert entries[0]["pub_year"] == 2024
+    assert entries[0]["doi"] == "10.1103/PhysRevA.100.012345"
 
 
-def test_extract_metadata_from_markdown_pra():
-    md = """PHYSICAL REVIEW A 81 , 022508 (2010)
-
-## Correlation, relativistic, and quantum electrodynamics effects on the atomic
-
-## structure of eka-thorium
-
-Gediminas Gaigalas, Erikas Gaidamauskas, and Zenonas Rudzikas Vilnius University Research Institute...
-
-Nicola Magnani and Roberto Caciuffo European Commission, Joint Research Centre...
-
-(Received 15 December 2009; published 22 February 2010)
-
-DOI: 10.1103/PhysRevA.81.022508
-"""
-    meta = extract_metadata_from_markdown(md, allow_network=False)
-    assert "Correlation, relativistic, and quantum electrodynamics" in meta.title
-    assert "eka-thorium" in meta.title
-    assert meta.year == 2010
-    assert "Physical Review A" in meta.journal or "PHYSICAL REVIEW A" in meta.journal
-    assert meta.doi == "10.1103/PhysRevA.81.022508"
+def test_bibtex_to_metadata():
+    entry = {
+        "title": "Sample BibTeX Title",
+        "authors": ["Author One", "Author Two"],
+        "journal": "Nature Physics",
+        "pub_year": 2023,
+        "doi": "10.1038/s41567-023-0001",
+    }
+    meta = bibtex_to_metadata(entry)
+    assert meta.title == "Sample BibTeX Title"
+    assert meta.authors == ["Author One", "Author Two"]
+    assert meta.journal == "Nature Physics"
+    assert meta.year == 2023
+    assert meta.doi == "10.1038/s41567-023-0001"
+    assert meta.source == "bibtex"
+    assert meta.confidence == 1.0
 
 
-def test_extract_metadata_for_document(tmp_path):
-    ws = tmp_path / "workspace"
-    ws.mkdir()
-    db = SQLiteManager(tmp_path / "test.db")
+def test_bibtex_import_dialog(qapp, tmp_path):
+    db = SQLiteManager(tmp_path / "test_bib_import.db")
     doc_id = db.upsert_document({
-        "title": "Old Inaccurate Title",
+        "title": "science · 2015 inaccurate title",
         "doc_type": "PAP",
         "pub_year": 2015,
         "journal": "science",
+        "authors": ["Unknown"],
     })
+    doc = db.get_document(doc_id)
+    assert doc is not None
 
-    # Put a parsed.md in storage
-    doc_dir = ws / "storage" / doc_id
-    doc_dir.mkdir(parents=True)
-    md_file = doc_dir / "parsed.md"
-    md_file.write_text(
-        "# 1982 J. Phys. B: At. Mol. Phys. 15 1319\n\n"
-        "# Analysis of fine-structure excitation energies\n\n"
-        "N C Pyper and I P Grant\n\n"
-        "Abstract. Some text here...\n",
-        encoding="utf-8",
-    )
+    dlg = BibtexImportDialog(db, doc)
+    sample_bib = """
+    @article{correct2024,
+      title = {Accurate Fine Structure Computation in Relativistic Atoms},
+      author = {Pyper, N. C. and Grant, I. P.},
+      journal = {Journal of Physics B},
+      year = {1982},
+      doi = {10.1088/0022-3700/15/9/009}
+    }
+    """
+    dlg.text_edit.setPlainText(sample_bib)
 
-    meta = extract_metadata_for_document(db, ws, doc_id, allow_network=False)
-    assert meta.title == "Analysis of fine-structure excitation energies"
-    assert meta.year == 1982
-    assert "J. Phys. B" in meta.journal
+    # Mock diff dialog to auto-accept
+    with patch("ui.dialogs.MetadataDiffDialog.exec", return_value=QDialog.Accepted):
+        dlg._parse_and_update()
+
+    # Verify db updated
+    updated = db.get_document(doc_id)
+    assert updated["title"] == "Accurate Fine Structure Computation in Relativistic Atoms"
+    assert updated["pub_year"] == 1982
+    assert updated["journal"] == "Journal of Physics B"
+    assert updated["doi"] == "10.1088/0022-3700/15/9/009"
+    assert "N. C. Pyper" in updated["authors_list"]
 
 
 def test_document_edit_dialog(qapp, tmp_path):
@@ -212,12 +227,12 @@ def test_metadata_diff_dialog(qapp):
     }
     from parser.metadata_extractor import DocumentMetadata
     detected = DocumentMetadata(
-        title="Accurate Paper Title Discovered by MinerU",
+        title="Accurate Paper Title Discovered by BibTeX",
         year=1982,
         journal="Journal of Physics B",
         authors=["Author 1", "Author 2"],
         doi="10.1088/test",
-        source="mineru_markdown",
+        source="bibtex",
     )
 
     diff_dlg = MetadataDiffDialog(curr_doc, detected)
@@ -230,7 +245,7 @@ def test_metadata_diff_dialog(qapp):
 
     updates = diff_dlg.get_selected_updates()
     assert updates["doc_id"] == "DOC-PAP-0000-TEST01"
-    assert updates["title"] == "Accurate Paper Title Discovered by MinerU"
+    assert updates["title"] == "Accurate Paper Title Discovered by BibTeX"
     assert updates["pub_year"] == 1982
     assert updates["journal"] == "Journal of Physics B"
     assert updates["authors"] == ["Author 1", "Author 2"]

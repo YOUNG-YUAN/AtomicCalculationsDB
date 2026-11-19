@@ -790,7 +790,7 @@ class MetadataDiffDialog(QDialog):
         self.current_doc = dict(current_doc)
         self.detected_meta = detected_meta
         doc_id = str(current_doc.get("doc_id") or "")
-        self.setWindowTitle(f"智能校准文献元数据 · {doc_id}")
+        self.setWindowTitle(f"BibTeX 元数据更新对比 · {doc_id}")
         self.resize(760, 480)
         self.setMinimumWidth(680)
 
@@ -798,19 +798,19 @@ class MetadataDiffDialog(QDialog):
         outer.setContentsMargins(18, 16, 18, 16)
         outer.setSpacing(12)
 
-        header = QLabel(f"智能校准元数据对比 · {doc_id}")
+        header = QLabel(f"BibTeX 元数据对比确认 · {doc_id}")
         header.setObjectName("SectionTitle")
         outer.addWidget(header)
 
-        source_text = "识别数据源："
-        if getattr(detected_meta, "source", "") in ("official_lookup", "official_lookup_manual"):
+        source_text = "数据来源："
+        if getattr(detected_meta, "source", "") == "bibtex":
+            source_text += "BibTeX 引用文件 / 引用文本精准解析"
+        elif getattr(detected_meta, "source", "") in ("official_lookup", "official_lookup_manual"):
             source_text += "DOI 官方核验 (Crossref/OpenAlex 权威注册信息)"
-        elif getattr(detected_meta, "source", "") == "mineru_markdown":
-            source_text += "MinerU 高精度 OCR/Markdown 结构化提取"
         elif getattr(detected_meta, "source", "") == "zotero_filename":
             source_text += "Zotero / Mendeley 标准文件名分析"
         else:
-            source_text += "本地 PDF 智能排版与文本层分析"
+            source_text += "外部导入元数据"
         sub_label = QLabel(source_text)
         sub_label.setObjectName("Muted")
         outer.addWidget(sub_label)
@@ -932,6 +932,129 @@ class MetadataDiffDialog(QDialog):
                 else:
                     updates[field_key] = det_val
         return updates
+
+
+class BibtexImportDialog(QDialog):
+    """Dialog allowing user to choose a .bib file or paste BibTeX text to update document metadata."""
+
+    def __init__(
+        self,
+        db: SQLiteManager,
+        doc: dict[str, Any],
+        parent: QWidget | None = None,
+    ):
+        super().__init__(parent)
+        self.db = db
+        self.doc = dict(doc)
+        doc_id = str(self.doc.get("doc_id") or "")
+        self.setWindowTitle(f"导入 BibTeX 更新文献信息 · {doc_id}")
+        self.resize(680, 520)
+        self.setMinimumWidth(560)
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(20, 18, 20, 18)
+        outer.setSpacing(12)
+
+        header = QLabel(f"导入 BibTeX 更新文献信息：{doc_id}")
+        header.setObjectName("SectionTitle")
+        outer.addWidget(header)
+
+        hint = QLabel(
+            "请选择本地 .bib / .txt 引用文件，或直接在下方输入框中粘贴 BibTeX 引用文本（支持 @article, @book, @inproceedings 等格式）："
+        )
+        hint.setObjectName("Muted")
+        hint.setWordWrap(True)
+        outer.addWidget(hint)
+
+        file_row = QHBoxLayout()
+        self.btn_select_file = QPushButton("📂 选择本地 BibTeX 文件...")
+        self.btn_select_file.setObjectName("Pill")
+        self.btn_select_file.clicked.connect(self._select_file)
+        file_row.addWidget(self.btn_select_file)
+
+        self.file_path_label = QLabel("未选择文件")
+        self.file_path_label.setObjectName("Tiny")
+        file_row.addWidget(self.file_path_label, 1)
+        outer.addLayout(file_row)
+
+        self.text_edit = QPlainTextEdit()
+        self.text_edit.setPlaceholderText(
+            "在此粘贴 BibTeX 引用内容，例如：\n\n"
+            "@article{pyper1982analysis,\n"
+            "  title={Analysis of fine-structure excitation energies in Dirac-Fock and perturbation theories},\n"
+            "  author={Pyper, N. C. and Rose, S. J. and Grant, I. P.},\n"
+            "  journal={Journal of Physics B: Atomic and Molecular Physics},\n"
+            "  volume={15},\n"
+            "  pages={1319},\n"
+            "  year={1982},\n"
+            "  doi={10.1088/0022-3700/15/9/009}\n"
+            "}"
+        )
+        outer.addWidget(self.text_edit, 1)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch(1)
+
+        cancel_btn = QPushButton("取消")
+        cancel_btn.setObjectName("Pill")
+        cancel_btn.clicked.connect(self.reject)
+        btn_row.addWidget(cancel_btn)
+
+        self.parse_btn = QPushButton("🔍 解析并比对更新")
+        self.parse_btn.setObjectName("Primary")
+        self.parse_btn.clicked.connect(self._parse_and_update)
+        btn_row.addWidget(self.parse_btn)
+
+        outer.addLayout(btn_row)
+
+    def _select_file(self) -> None:
+        from PySide6.QtWidgets import QFileDialog
+
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "选择 BibTeX 文件",
+            "",
+            "BibTeX 文件 (*.bib *.txt);;所有文件 (*.*)",
+        )
+        if path:
+            self.file_path_label.setText(path)
+            try:
+                content = Path(path).read_text(encoding="utf-8", errors="ignore")
+                self.text_edit.setPlainText(content)
+            except Exception as exc:
+                QMessageBox.warning(self, "读取文件失败", f"无法读取文件内容：\n{exc}")
+
+    def _parse_and_update(self) -> None:
+        from parser.metadata_extractor import bibtex_to_metadata, parse_bibtex_text
+
+        text = self.text_edit.toPlainText().strip()
+        if not text:
+            QMessageBox.warning(self, "内容为空", "请先选择 BibTeX 文件或在输入框中粘贴 BibTeX 文本。")
+            return
+
+        entries = parse_bibtex_text(text)
+        if not entries:
+            QMessageBox.warning(
+                self,
+                "解析失败",
+                "未在输入内容中识别出有效的 BibTeX 条目。\n\n"
+                "请确认内容以 @article{...}、@book{...} 等标准格式开头并包含完整字段。",
+            )
+            return
+
+        entry = entries[0]
+        detected = bibtex_to_metadata(entry)
+
+        diff_dlg = MetadataDiffDialog(self.doc, detected, parent=self)
+        if diff_dlg.exec() == QDialog.Accepted:
+            updates = diff_dlg.get_selected_updates()
+            if entry.get("doc_type"):
+                updates["doc_type"] = entry["doc_type"]
+            if updates and len(updates) > 1:
+                self.db.upsert_document(updates)
+                self.accept()
+            else:
+                QMessageBox.information(self, "未作修改", "未选择任何需要更新的元数据字段。")
 
 
 class DocumentDetailDialog(QDialog):
@@ -1175,11 +1298,11 @@ class DocumentDetailDialog(QDialog):
         meta_toolbar.addWidget(meta_title)
         meta_toolbar.addStretch(1)
 
-        self.btn_auto_calibrate = QPushButton("🔍 智能校准元数据 (MinerU/OCR)")
-        self.btn_auto_calibrate.setObjectName("Pill")
-        self.btn_auto_calibrate.setToolTip("基于 MinerU 高精度 Markdown 或官方权威库自动识别并校准标题、作者、年份、期刊与 DOI")
-        self.btn_auto_calibrate.clicked.connect(self._auto_calibrate_metadata)
-        meta_toolbar.addWidget(self.btn_auto_calibrate)
+        self.btn_import_bibtex = QPushButton("📖 导入BibTex自动更新文献信息")
+        self.btn_import_bibtex.setObjectName("Pill")
+        self.btn_import_bibtex.setToolTip("通过导入 .bib 文件或直接粘贴 BibTeX 引用内容，精准自动更新文献元数据")
+        self.btn_import_bibtex.clicked.connect(self._import_bibtex_metadata)
+        meta_toolbar.addWidget(self.btn_import_bibtex)
 
         self.btn_edit_meta = QPushButton("✏️ 编辑文献信息")
         self.btn_edit_meta.setObjectName("Pill")
@@ -1803,27 +1926,17 @@ class DocumentDetailDialog(QDialog):
         if dialog.exec() == QDialog.Accepted:
             self._refresh_metadata_display()
 
-    def _auto_calibrate_metadata(self) -> None:
+    def _import_bibtex_metadata(self) -> None:
         if not self.doc:
             return
-        from parser.metadata_extractor import extract_metadata_for_document
-
-        candidate_meta = extract_metadata_for_document(
-            self.db, self.workspace, self.doc["doc_id"], allow_network=True
-        )
-        diff_dialog = MetadataDiffDialog(self.doc, candidate_meta, parent=self)
-        if diff_dialog.exec() == QDialog.Accepted:
-            updates = diff_dialog.get_selected_updates()
-            if updates and len(updates) > 1:  # More than just doc_id
-                self.db.upsert_document(updates)
-                self._refresh_metadata_display()
-                QMessageBox.information(
-                    self,
-                    "校准成功",
-                    f"文献 [{self.doc['doc_id']}] 元数据已成功校准并同步至数据库！",
-                )
-            else:
-                QMessageBox.information(self, "未作修改", "未选择任何需要校准的元数据字段。")
+        dlg = BibtexImportDialog(self.db, self.doc, parent=self)
+        if dlg.exec() == QDialog.Accepted:
+            self._refresh_metadata_display()
+            QMessageBox.information(
+                self,
+                "更新成功",
+                f"文献 [{self.doc['doc_id']}] 已成功通过 BibTeX 完成元数据更新与同步！",
+            )
 
 
 
