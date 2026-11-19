@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
 )
 
 from models.semi_auto import (
+    DEFAULT_AGENT_MODEL,
     DEFAULT_MAX_BATCH_TOKENS,
     BatchMisalignedError,
     SemiAutoError,
@@ -52,6 +53,57 @@ from ui.step_progress_widget import StepProgressWidget
 from models.pipeline_stepper import compute_document_pipeline_status
 from ui.workers import ParseWorker
 
+PRESET_AGENT_MODELS: list[str] = [
+    "GPT-6.2 Sol Ultra",
+    "GPT-6.1 Sol Ultra",
+    "Claude 3.7 Sonnet",
+    "Gemini 2.5 Pro",
+    "DeepSeek R1",
+    "o3-mini",
+    "GPT-4o",
+]
+
+
+def get_default_agent_model(config: Any = None) -> str:
+    """Return the last used agent model from config or QSettings, defaulting to GPT-6.2 Sol Ultra."""
+    if config is not None:
+        try:
+            val = config.get("semi_auto.agent_model")
+            if val and str(val).strip():
+                return str(val).strip()
+        except Exception:
+            pass
+    try:
+        from PySide6.QtCore import QSettings
+
+        settings = QSettings("AtomicCalculationDB", "AtomicCalculationDB")
+        val = settings.value("semi_auto_agent_model", "")
+        if val and str(val).strip():
+            return str(val).strip()
+    except Exception:
+        pass
+    return DEFAULT_AGENT_MODEL
+
+
+def save_default_agent_model(model_name: str, config: Any = None) -> None:
+    """Persist the last used agent model to config and QSettings."""
+    model = str(model_name or "").strip()
+    if not model:
+        return
+    if config is not None:
+        try:
+            config.set("semi_auto.agent_model", model)
+            config.save()
+        except Exception:
+            pass
+    try:
+        from PySide6.QtCore import QSettings
+
+        settings = QSettings("AtomicCalculationDB", "AtomicCalculationDB")
+        settings.setValue("semi_auto_agent_model", model)
+    except Exception:
+        pass
+
 
 class PasteReplyDialog(QDialog):
     """Modal dialog for pasting web AI reply JSON, matching Image 4 specification."""
@@ -59,10 +111,16 @@ class PasteReplyDialog(QDialog):
     def __init__(
         self,
         slot: int,
-        model: str = "GPT-6.1 Sol Ultra",
+        model: str = "",
+        config: Any = None,
         parent: QWidget | None = None,
     ):
         super().__init__(parent)
+        self.config = config
+        current_model = (model or "").strip()
+        if not current_model:
+            current_model = get_default_agent_model(self.config)
+
         self.setWindowTitle(f"粘贴提问包 {slot} 的网页 AI 回复")
         self.resize(540, 420)
         layout = QVBoxLayout(self)
@@ -81,16 +139,11 @@ class PasteReplyDialog(QDialog):
         top_row.addWidget(model_lbl)
         self.model_combo = QComboBox()
         self.model_combo.setEditable(True)
-        self.model_combo.addItems([
-            "GPT-6.1 Sol Ultra",
-            "Claude 3.7 Sonnet",
-            "Gemini 2.5 Pro",
-            "DeepSeek R1",
-            "o3-mini",
-            "GPT-4o",
-        ])
-        if model:
-            self.model_combo.setCurrentText(str(model).strip())
+        items = list(PRESET_AGENT_MODELS)
+        if current_model and current_model not in items:
+            items.insert(0, current_model)
+        self.model_combo.addItems(items)
+        self.model_combo.setCurrentText(current_model)
         self.model_combo.setMinimumWidth(160)
         top_row.addWidget(self.model_combo)
         layout.addLayout(top_row)
@@ -141,7 +194,7 @@ class PasteReplyDialog(QDialog):
         return self.text_edit.toPlainText().strip()
 
     def get_model_name(self) -> str:
-        return self.model_combo.currentText().strip() or "GPT-6.1 Sol Ultra"
+        return self.model_combo.currentText().strip() or DEFAULT_AGENT_MODEL
 
 
 class SemiAutoBatchDialog(QDialog):
@@ -167,6 +220,15 @@ class SemiAutoBatchDialog(QDialog):
         self.doc_ids = [str(item) for item in doc_ids if item]
         self.mode = str(mode or "force").lower()
         self.config = config
+        if self.config is None:
+            try:
+                from config import AppConfig
+
+                cfg_p = self.workspace / "config.yaml"
+                if cfg_p.is_file():
+                    self.config = AppConfig.load(cfg_p, create=False)
+            except Exception:
+                pass
         self.manifest = find_unfinished_run(self.workspace, self.doc_ids)
         if (
             self.manifest
@@ -266,20 +328,24 @@ class SemiAutoBatchDialog(QDialog):
         controls.addWidget(QLabel("处理模型:"))
         self.model_combo = QComboBox()
         self.model_combo.setEditable(True)
-        self.model_combo.addItems([
-            "GPT-6.1 Sol Ultra",
-            "Claude 3.7 Sonnet",
-            "Gemini 2.5 Pro",
-            "DeepSeek R1",
-            "o3-mini",
-            "GPT-4o",
-        ])
-        initial_model = "GPT-6.1 Sol Ultra"
+        initial_model = ""
         if self.manifest and self.manifest.get("agent_model"):
             initial_model = str(self.manifest["agent_model"]).strip()
+        if not initial_model:
+            initial_model = get_default_agent_model(self.config)
+
+        items = list(PRESET_AGENT_MODELS)
+        if initial_model and initial_model not in items:
+            items.insert(0, initial_model)
+        self.model_combo.addItems(items)
+
         self.current_agent_model = initial_model
         self.model_combo.setCurrentText(initial_model)
         self.model_combo.currentTextChanged.connect(self._on_model_changed)
+        if self.model_combo.lineEdit():
+            self.model_combo.lineEdit().editingFinished.connect(
+                lambda: save_default_agent_model(self.current_agent_model, self.config)
+            )
         self.model_combo.setMinimumWidth(160)
         self.model_combo.setMaximumWidth(200)
         controls.addWidget(self.model_combo)
@@ -382,9 +448,14 @@ class SemiAutoBatchDialog(QDialog):
 
     # ------------------------------------------------------------- controls
     def _on_model_changed(self, text: str) -> None:
-        self.current_agent_model = text.strip() or "GPT-6.1 Sol Ultra"
+        self.current_agent_model = text.strip() or DEFAULT_AGENT_MODEL
         if self.manifest:
             self.manifest["agent_model"] = self.current_agent_model
+            try:
+                save_run(self.workspace, self.manifest)
+            except Exception:
+                pass
+        save_default_agent_model(self.current_agent_model, self.config)
 
     def _on_budget_changed(self, value: int) -> None:
         if self.manifest and str(self.manifest.get("status")).upper() != "FINALIZED":
@@ -607,7 +678,9 @@ class SemiAutoBatchDialog(QDialog):
                 self.pipeline,
                 max_batch_tokens=int(self.budget.value()),
                 mode=self.mode,
+                agent_model=self.current_agent_model,
             )
+            save_default_agent_model(self.current_agent_model, self.config)
         except Exception as exc:
             QMessageBox.warning(self, "生成提问包失败", str(exc))
             self.manifest = None
@@ -670,7 +743,7 @@ class SemiAutoBatchDialog(QDialog):
     def _paste_reply(self, batch: dict[str, Any]) -> None:
         slot = int(batch.get("slot") or 1)
         dialog = PasteReplyDialog(
-            slot, model=self.current_agent_model, parent=self
+            slot, model=self.current_agent_model, config=self.config, parent=self
         )
         if dialog.exec() == QDialog.Accepted:
             text = dialog.get_text()
@@ -680,6 +753,9 @@ class SemiAutoBatchDialog(QDialog):
                 )
                 return
             chosen_model = dialog.get_model_name()
+            self.current_agent_model = chosen_model
+            self.model_combo.setCurrentText(chosen_model)
+            save_default_agent_model(chosen_model, self.config)
             self._apply_reply(batch, text, agent_model=chosen_model)
 
     def _copy_album_pdf(self, batch: dict[str, Any]) -> None:
@@ -713,6 +789,7 @@ class SemiAutoBatchDialog(QDialog):
         if not self.manifest:
             return
         model_name = agent_model or self.current_agent_model
+        save_default_agent_model(model_name, self.config)
         try:
             result = import_reply(
                 self.workspace,
@@ -1198,4 +1275,11 @@ class SemiAutoBatchDialog(QDialog):
         self.changed.emit()
 
 
-__all__ = ["SemiAutoBatchDialog"]
+__all__ = [
+    "DEFAULT_AGENT_MODEL",
+    "PRESET_AGENT_MODELS",
+    "PasteReplyDialog",
+    "SemiAutoBatchDialog",
+    "get_default_agent_model",
+    "save_default_agent_model",
+]

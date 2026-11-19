@@ -24,6 +24,10 @@ DEFAULTS: dict[str, Any] = {
     "explore": {
         "page_size": 20,
     },
+    "semi_auto": {
+        "max_batch_tokens": 20000,
+        "agent_model": "GPT-6.2 Sol Ultra",
+    },
     "parser": {
         "mineru": {
             "enabled": False,

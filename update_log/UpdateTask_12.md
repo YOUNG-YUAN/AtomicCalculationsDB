@@ -1,4 +1,4 @@
-# UpdateTask_12.md — `AtomicCalculationDB` (V3.1.0) BibTeX文献信息导入更新、清单行内防误触锁定与专属元数据编辑对话框
+# UpdateTask_12.md — `AtomicCalculationDB` (V3.1.0) BibTeX文献信息导入更新、清单行内防误触锁定、专属元数据编辑对话框与处理模型智能记忆
 
 > **版本**：`v3.1.0`  
 > **构建号**：`20261119`  
@@ -18,6 +18,10 @@
 >      - `✏️ 编辑文献信息` 按键：弹出规范化独立编辑表单，支持手动修改文献标题、文献类型（PAP 论文 / MAN 手册 / BOK 专著 / REV 综述）、出版年份、期刊/出版社、作者列表、DOI、arXiv ID；
 >      - `📖 导入BibTex自动更新文献信息` 按键：一键唤起 BibTeX 导入与差异核对窗口；
 >    - 文献库右键菜单同步集成单篇与批量导入 BibTeX、单篇手动编辑快捷入口。
+> 4. **网页 AI 半自动提炼“处理模型”智能记忆与初始模型升级 (`GPT-6.2 Sol Ultra`)**：
+>    - 全新程序/工作区的默认提炼模型升级为最新的旗舰大模型：`GPT-6.2 Sol Ultra`；
+>    - 建立跨会话模型记忆机制：用户在半自动提炼工作台（顶栏处理模型下拉框、粘贴回复弹窗等）每次更改或自定义输入模型后，自动持久化至工作区配置（`config.yaml` 中 `semi_auto.agent_model`）以及系统配置（`QSettings`）；
+>    - 下次打开工作台或生成新任务包时，自动以最后一次输入的模型作为默认配置；自定义模型自动置顶加入快捷下拉列表，免去反复重新输入的繁琐操作。
 
 ---
 
@@ -47,8 +51,7 @@
 
 ### 2.2 右键菜单功能扩展
 - 新增 `📖 导入BibTex自动更新文献信息`；
-- 新增 `✏️ 编辑文献信息`；
-- 多选文献时新增 `📖 批量导入BibTex更新文献信息 (N 篇)`。
+- 新增 `✏️ 编辑文献信息`。
 
 ---
 
@@ -77,9 +80,24 @@
 
 ---
 
-## 4. 自动化测试与质量验收 (`tests/test_v310.py`)
+## 4. 处理模型智能记忆机制 (`app_core/ui/semi_auto_dialog.py` & `app_core/models/semi_auto.py`)
 
-- **全量测试通过**：245 项自动化单元测试全部一次性通过（0 失败，0 错误）；
+### 4.1 初始旗舰默认模型升级
+- `DEFAULT_AGENT_MODEL` 统一升级为 `GPT-6.2 Sol Ultra`；
+- `app_core/config.py` 的 `DEFAULTS` 中正式增加 `"semi_auto": {"agent_model": "GPT-6.2 Sol Ultra", "max_batch_tokens": 20000}`。
+
+### 4.2 动态记忆与持久化
+- `save_default_agent_model(model_name, config)`：
+  - 同步写入 `config.set("semi_auto.agent_model", model_name)` 并持久化；
+  - 同步更新系统级注册表/首选项 `QSettings("AtomicCalculationDB", "AtomicCalculationDB")`；
+- `get_default_agent_model(config)`：优先读取配置，缺失时自动安全回退至系统首选项或 `GPT-6.2 Sol Ultra`；
+- 用户在工作台下拉框手动修改（含输入完成 `editingFinished`）、点击生成提问包、导入回复或在粘贴回复弹窗选择模型时，自动触发生效并记忆。
+
+---
+
+## 5. 自动化测试与质量验收 (`tests/test_v310.py`)
+
+- **全量测试通过**：246 项自动化单元测试全部一次性通过（0 失败，0 错误）；
 - **专项测试覆盖**：
   1. `test_v310_version_json`：校验版本号为 3.1.0，构建号 20261119；
   2. `test_parse_bibtex_text`：验证 `@article`, `@book`, `@manual` 各种花括号、引号及作者倒置转换解析；
@@ -88,4 +106,5 @@
   5. `test_bibtex_import_dialog`：验证 BibTeX 导入对话框粘贴与文件读取的交互逻辑；
   6. `test_document_edit_dialog`：验证表单手动修改、DOC-ID 只读锁定及数据库写回；
   7. `test_metadata_diff_dialog`：验证 BibTeX 比对差异预选逻辑与更新字典提取；
-  8. `test_library_view_table_not_editable`：验证表格 `NoEditTriggers` 及所有单元格无 `ItemIsEditable` 标志。
+  8. `test_library_view_table_not_editable`：验证表格 `NoEditTriggers` 及所有单元格无 `ItemIsEditable` 标志；
+  9. `test_agent_model_last_used_persistence`：验证新程序默认 GPT-6.2 Sol Ultra、修改后自动持久化到 config/QSettings 以及对话框无缝记忆加载。

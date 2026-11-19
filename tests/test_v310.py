@@ -275,3 +275,45 @@ def test_library_view_table_not_editable(qapp, tmp_path):
         if item is not None:
             # ItemIsEditable (value 4) must NOT be in flags
             assert not (item.flags() & Qt.ItemIsEditable), f"Column {col} has ItemIsEditable flag"
+
+
+def test_agent_model_last_used_persistence(qapp, tmp_path):
+    from config import AppConfig
+    from ui.semi_auto_dialog import (
+        DEFAULT_AGENT_MODEL,
+        PasteReplyDialog,
+        SemiAutoBatchDialog,
+        get_default_agent_model,
+        save_default_agent_model,
+    )
+
+    # 1. Initial state for fresh config is GPT-6.2 Sol Ultra
+    cfg = AppConfig({}, tmp_path / "config.yaml")
+    assert get_default_agent_model(cfg) == "GPT-6.2 Sol Ultra"
+    assert DEFAULT_AGENT_MODEL == "GPT-6.2 Sol Ultra"
+
+    # 2. Save a custom model and verify get_default_agent_model retrieves it
+    save_default_agent_model("Claude 3.7 Sonnet", cfg)
+    assert get_default_agent_model(cfg) == "Claude 3.7 Sonnet"
+    assert cfg.get("semi_auto.agent_model") == "Claude 3.7 Sonnet"
+
+    # 3. Verify SemiAutoBatchDialog initializes with this model
+    db = SQLiteManager(tmp_path / "test_semi.db")
+    doc_id = db.upsert_document({"title": "Test Paper for Semi Auto", "doc_type": "PAP", "pub_year": 2024})
+    dlg = SemiAutoBatchDialog(db, tmp_path, pipeline=None, doc_ids=[doc_id], config=cfg)
+    assert dlg.model_combo.currentText() == "Claude 3.7 Sonnet"
+    assert dlg.current_agent_model == "Claude 3.7 Sonnet"
+
+    # 4. User changes model in combo box -> automatically persisted
+    dlg.model_combo.setCurrentText("DeepSeek R1")
+    assert cfg.get("semi_auto.agent_model") == "DeepSeek R1"
+    assert get_default_agent_model(cfg) == "DeepSeek R1"
+
+    # 5. Verify PasteReplyDialog also picks up the updated default model
+    paste_dlg = PasteReplyDialog(1, config=cfg)
+    assert paste_dlg.model_combo.currentText() == "DeepSeek R1"
+    assert paste_dlg.get_model_name() == "DeepSeek R1"
+
+    # 6. Reset to GPT-6.2 Sol Ultra
+    save_default_agent_model("GPT-6.2 Sol Ultra", cfg)
+    assert get_default_agent_model(cfg) == "GPT-6.2 Sol Ultra"

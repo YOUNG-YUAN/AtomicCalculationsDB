@@ -28,6 +28,7 @@ from parser.context_bundler import ContextBundle, bundle_hash
 
 SCHEMA = "acdb.semi_auto.v1"
 DEFAULT_MAX_BATCH_TOKENS = 80_000
+DEFAULT_AGENT_MODEL: str = "GPT-6.2 Sol Ultra"
 MANUAL_DOC_TYPES = {"MAN", "BOK"}
 
 
@@ -223,6 +224,7 @@ def create_run(
     *,
     max_batch_tokens: int = DEFAULT_MAX_BATCH_TOKENS,
     mode: str = "force",
+    agent_model: str = "",
 ) -> dict[str, Any]:
     """Create prompts and a persistent manifest for the selected documents."""
     workspace = Path(workspace)
@@ -297,6 +299,7 @@ def create_run(
         "status": "WAITING",
         "mode": "force" if force else "incremental",
         "max_batch_tokens": budget,
+        "agent_model": str(agent_model or DEFAULT_AGENT_MODEL).strip(),
         "documents": [
             {
                 "doc_id": str(document.get("doc_id") or ""),
@@ -748,7 +751,7 @@ def _batch_provenance(
             "name": imported_by or "网页版 AI 手动",
             "node_type": "SEMI_AUTO_CLIPBOARD",
             "provider": "semi_auto",
-            "model": agent_model or "GPT-6.1 Sol Ultra",
+            "model": agent_model or DEFAULT_AGENT_MODEL,
         }
     }
 
@@ -819,7 +822,7 @@ def finalize_run(
                 if not document:
                     continue
                 effective_model = (
-                    str(batch.get("agent_model") or agent_model or "GPT-6.1 Sol Ultra").strip()
+                    str(batch.get("agent_model") or agent_model or DEFAULT_AGENT_MODEL).strip()
                 )
                 for draft in result.cards:
                     if hasattr(draft, "structured_details"):
@@ -945,6 +948,7 @@ def delete_run(workspace: str | Path, run_id: str) -> None:
 
 
 __all__ = [
+    "DEFAULT_AGENT_MODEL",
     "DEFAULT_MAX_BATCH_TOKENS",
     "SemiAutoError",
     "create_run",
