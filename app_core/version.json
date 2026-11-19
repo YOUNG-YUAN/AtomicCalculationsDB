@@ -1,6 +1,6 @@
 {
-  "version": "3.0.4",
-  "build": "20261118",
+  "version": "3.1.0",
+  "build": "20261119",
   "schema_ver": 3,
-  "channel": "v3.0"
+  "channel": "v3.1"
 }

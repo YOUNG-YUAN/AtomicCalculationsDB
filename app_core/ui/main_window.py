@@ -681,10 +681,13 @@ class MainWindow(QMainWindow):
                 self.toast.show_message("证据块缺少父卡片")
 
     def open_document(self, doc_id: str) -> None:
-        DocumentDetailDialog(
+        dlg = DocumentDetailDialog(
             self.db, self.workspace_dir, doc_id,
             parent=self, pipeline=self.pipeline,
-        ).exec()
+        )
+        dlg.data_changed.connect(self.library_view.refresh)
+        dlg.exec()
+        self.library_view.refresh()
 
     def open_keyword(self, kw_id: str) -> None:
         KeywordDetailDialog(self.db, self.workspace_dir, kw_id, parent=self).exec()

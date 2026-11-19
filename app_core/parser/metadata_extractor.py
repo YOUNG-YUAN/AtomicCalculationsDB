@@ -400,6 +400,19 @@ def extract_document_metadata(
 ) -> DocumentMetadata:
     path = Path(pdf_path)
     filename_meta = parse_zotero_filename(path)
+    md_file = path.parent / "parsed.md"
+    if md_file.is_file():
+        try:
+            md_meta = extract_metadata_from_markdown(
+                md_file.read_text(encoding="utf-8", errors="ignore"),
+                filename=path.name,
+                allow_network=allow_network,
+                metadata_fetcher=metadata_fetcher,
+            )
+            if md_meta.title and is_valid_title(md_meta.title):
+                return md_meta
+        except Exception:
+            pass
     own_doc = doc is None
     if fitz is None or not path.exists():
         return filename_meta
@@ -589,9 +602,292 @@ def repair_invalid_documents(
     return counts
 
 
+def clean_publisher_banners(text: str) -> list[str]:
+    """Filter out publisher download covers, IP stamps and download notices."""
+    lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
+    clean_lines: list[str] = []
+    banner_keywords = (
+        "downloaded from", "download details", "ip address", "terms and conditions apply",
+        "my iopscience", "home search collections", "view the table of contents",
+        "please scroll down to see the full text", "printed in great britain",
+        "content courtesy of springer", "authorized licensed use", "available online at",
+        "sciencedirect", "ieee xplore", "this content has been downloaded",
+        "this article has been downloaded",
+    )
+    for line in lines[:100]:
+        lowered = line.lower()
+        if any(keyword in lowered for keyword in banner_keywords):
+            continue
+        clean_lines.append(line)
+    return clean_lines
+
+
+def extract_metadata_from_markdown(
+    md_text: str,
+    filename: str = "",
+    *,
+    allow_network: bool = True,
+    metadata_fetcher: Callable[[str, str], DocumentMetadata] | None = None,
+) -> DocumentMetadata:
+    """High-precision metadata extraction from structured Markdown (e.g. MinerU).
+
+    Prioritizes clean headings and citations, resolves IOP/Springer/Elsevier DOI,
+    and queries official registries (Crossref/OpenAlex) if network is permitted.
+    """
+    clean_lines = clean_publisher_banners(md_text)
+    clean_text = "\n".join(clean_lines)
+
+    # 1. Extract DOI or publisher-specific identifier
+    doi = ""
+    doi_match = re.search(r"\b(10\.\d{4,9}/[^\s\"\'<>]+)", md_text)
+    if doi_match:
+        doi = doi_match.group(1).rstrip(".,;:)]}'\"")
+    else:
+        # Detect IOP URL: http://iopscience.iop.org/0022-3700/15/9/009
+        iop_match = re.search(
+            r"iopscience\.iop\.org/(?:[^/\s]+/)?(\d{4}-\d{3}[0-9Xx]/\d+/\d+/\d+)",
+            md_text,
+        )
+        if iop_match:
+            doi = f"10.1088/{iop_match.group(1)}"
+
+    # If network allowed and DOI present, query Crossref / OpenAlex
+    if allow_network and doi:
+        remote = DocumentMetadata()
+        if metadata_fetcher is not None:
+            remote = metadata_fetcher(doi, "")
+        else:
+            remote = fetch_metadata_by_doi(doi)
+        if remote.title and is_valid_title(remote.title):
+            # Clean MathML or HTML markup in Crossref titles
+            remote.title = re.sub(r"<[^>]+>", "", remote.title)
+            remote.title = normalize_text(remote.title)
+            remote.journal = re.sub(r"<[^>]+>", "", remote.journal or "")
+            remote.journal = normalize_text(remote.journal)
+            remote.doi = doi
+            if filename and is_manual_document(title=remote.title, filename=Path(filename).name):
+                remote.source = "official_lookup_manual"
+            else:
+                remote.source = "official_lookup"
+            return remote
+
+    # 2. Local heuristic extraction from structured Markdown
+    year: int | None = None
+    journal = ""
+
+    # Check Zotero/Mendeley filename if available
+    fn_meta = parse_zotero_filename(filename) if filename else DocumentMetadata()
+
+    # Search clean lines for publication citation headers
+    for line in clean_lines[:40]:
+        # Pattern 1: "1982 J. Phys. B: At. Mol. Phys. 15 1319"
+        m1 = re.search(
+            r"\b(19\d{2}|20\d{2})\s+([A-Z][A-Za-z0-9\.\s:&-]+?)\s+(\d+)\s+([0-9A-Za-z]+)",
+            line,
+        )
+        if m1 and not re.search(r"\b(published|received|downloaded|accepted|figure|table)\b", m1.group(2), re.I):
+            year = int(m1.group(1))
+            journal = normalize_text(m1.group(2))
+            break
+
+        # Pattern 2: "PHYSICAL REVIEW A 79 , 022511 2009"
+        m2_pra = re.search(
+            r"\b(PHYSICAL REVIEW [A-E]|Phys\. Rev\. [A-E])\s+(\d+)\s*,\s*([0-9A-Za-z]+)\s+.*?(\d{4})\b",
+            line,
+            re.I,
+        )
+        if m2_pra:
+            journal = normalize_text(m2_pra.group(1))
+            year = int(m2_pra.group(4))
+            break
+
+        # Pattern 3: "Physical Review A 81 , 022508 (2010)"
+        m2 = re.search(
+            r"(PHYSICAL REVIEW [A-E]|Phys\. Rev\. [A-E]|J(?:ournal)?\.?\s*Phys(?:ics)?\.?\s*[A-G]?|"
+            r"Comput(?:er)?\.?\s*Phys(?:ics)?\.?\s*Commun(?:ications)?|"
+            r"At(?:omic)?\.?\s*Data\s*(?:and\s*Nucl(?:ear)?\.?\s*Data\s*Tables)?)\s*(\d+)?\s*,\s*([0-9A-Za-z]+)?\s*\(?(19\d{2}|20\d{2})\)?",
+            line,
+            re.I,
+        )
+        if m2:
+            journal = normalize_text(m2.group(1))
+            if m2.group(4):
+                year = int(m2.group(4))
+            break
+
+        # Pattern 4: "J. Phys. B: At. Mol. Phys. 15 (1982) 1319-1331"
+        m3 = re.search(
+            r"([A-Za-z\.\s&]+)\s+(\d+)\s*\((19\d{2}|20\d{2})\)\s+(\d+[-–]\d+)",
+            line,
+        )
+        if m3 and not re.search(r"\b(received|accepted)\b", m3.group(1), re.I):
+            journal = normalize_text(m3.group(1))
+            year = int(m3.group(3))
+            break
+
+    # Year fallback from published/received stamps
+    if year is None:
+        ym = re.search(
+            r"\b(published|online)\b[^\n\d]*\b\d*\s*[A-Za-z]*\s*(19\d\d|20\d\d)\b",
+            clean_text[:4000],
+            re.I,
+        )
+        if ym:
+            year = int(ym.group(2))
+        elif fn_meta.year:
+            year = fn_meta.year
+
+    # Deduce journal from DOI prefix if journal not found in header
+    if not journal and doi:
+        if "10.1103/PhysRevA" in doi:
+            journal = "Physical Review A"
+        elif "10.1103/PhysRevB" in doi:
+            journal = "Physical Review B"
+        elif "10.1103/PhysRev" in doi:
+            journal = "Physical Review"
+        elif "10.1088/0953-4075" in doi:
+            journal = "Journal of Physics B: Atomic, Molecular and Optical Physics"
+        elif "10.1088/0022-3700" in doi:
+            journal = "Journal of Physics B: Atomic and Molecular Physics"
+        elif "10.1016" in doi:
+            journal = "Elsevier"
+
+    # 3. Extract title from Markdown headers
+    title = ""
+    title_idx = -1
+    for i, line in enumerate(clean_lines[:25]):
+        hm = re.match(r"^#{1,3}\s+(.+)$", line)
+        candidate = hm.group(1).strip() if hm else ""
+        if not candidate:
+            continue
+        # Skip citation-like headers (e.g. # 1982 J. Phys. B... or # 1320 N C Pyper)
+        if re.match(r"^(19\d\d|20\d\d)\s+[A-Z]", candidate):
+            continue
+        if re.match(r"^\d+\s+[A-Z]\s+[A-Z]", candidate):
+            continue
+        if re.match(r"^(I|II|III|IV|V|\d+)\.?\s+(Introduction|Theory|Overview|Methods)", candidate, re.I):
+            continue
+        if len(candidate) >= 12:
+            title = candidate
+            title_idx = i
+            # Check for multi-line heading
+            for j in range(i + 1, min(i + 4, len(clean_lines))):
+                next_line = clean_lines[j]
+                nm = re.match(r"^#{1,3}\s+(.+)$", next_line)
+                if nm and not re.match(r"^(19\d\d|20\d\d|I\.|Abstract|\d+\.)", nm.group(1), re.I):
+                    title += " " + nm.group(1).strip()
+                else:
+                    break
+            break
+
+    if not title and fn_meta.title:
+        title = fn_meta.title
+
+    # 4. Extract authors
+    authors: list[str] = []
+    if title_idx >= 0:
+        for line in clean_lines[title_idx + 1:title_idx + 12]:
+            if re.match(r"^#{1,3}\s+", line) and not re.search(r"\b(author|department|university)\b", line, re.I):
+                continue
+            if re.match(r"^(abstract|received|published|\$\$|\d+\s+PACS|doi:)", line, re.I):
+                break
+            if re.match(r"^(department|institute|laboratory|school|faculty|division)\b", line, re.I):
+                continue
+            # Remove affiliation suffixes if present on the same line
+            clean_author_line = re.split(
+                r"\b(Department|Institute|Laboratory|School|Faculty|University|College|Division)\b",
+                line,
+                maxsplit=1,
+                flags=re.I,
+            )[0]
+            clean_author_line = re.sub(r"[\?\+§\*†‡~^]", "", clean_author_line)
+            clean_author_line = re.sub(r"\b\d+\b", "", clean_author_line)
+            parts = [
+                part.strip()
+                for part in re.split(r"[,;]|\s+and\s+|\s+&\s+", clean_author_line)
+                if len(part.strip()) >= 2
+            ]
+            parts = [
+                p for p in parts
+                if any(re.search(r"^[A-Z][a-z]+|\b[A-Z]\s+[A-Z]\b", p) for p in [p])
+            ]
+            if parts:
+                authors.extend(parts)
+                if len(authors) >= 1:
+                    break
+
+    if not authors and fn_meta.authors:
+        authors = list(fn_meta.authors)
+
+    return DocumentMetadata(
+        title=normalize_text(title),
+        authors=authors,
+        journal=journal,
+        year=year,
+        doi=doi,
+        source="mineru_markdown",
+        confidence=0.88 if title else 0.50,
+    )
+
+
+def extract_metadata_for_document(
+    db: Any,
+    workspace: str | Path,
+    doc_id: str,
+    *,
+    allow_network: bool = True,
+    metadata_fetcher: Callable[[str, str], DocumentMetadata] | None = None,
+) -> DocumentMetadata:
+    """Locate parsed.md or local PDF for doc_id and extract calibrated metadata."""
+    root = Path(workspace)
+    document = db.get_document(doc_id) if hasattr(db, "get_document") else None
+    if not document:
+        return DocumentMetadata()
+
+    filename = str(document.get("local_pdf_path") or "")
+    # Check parsed.md path
+    md_candidates: list[Path] = []
+    if document.get("local_md_path"):
+        md_p = Path(str(document["local_md_path"]))
+        md_candidates.append(md_p if md_p.is_absolute() else root / md_p)
+    md_candidates.append(root / "storage" / doc_id / "parsed.md")
+
+    for md_path in md_candidates:
+        if md_path.is_file():
+            try:
+                md_text = md_path.read_text(encoding="utf-8", errors="ignore")
+                meta = extract_metadata_from_markdown(
+                    md_text,
+                    filename=filename,
+                    allow_network=allow_network,
+                    metadata_fetcher=metadata_fetcher,
+                )
+                if meta.title or meta.year or meta.journal or meta.doi:
+                    return meta
+            except Exception as exc:
+                log.warning("Failed extracting metadata from %s: %s", md_path, exc)
+
+    # Fallback to PDF extraction
+    if filename:
+        pdf_path = Path(filename)
+        if not pdf_path.is_absolute():
+            pdf_path = root / pdf_path
+        if pdf_path.is_file():
+            return extract_document_metadata(
+                pdf_path,
+                allow_network=allow_network,
+                metadata_fetcher=metadata_fetcher,
+            )
+
+    return DocumentMetadata()
+
+
 __all__ = [
     "DocumentMetadata",
+    "clean_publisher_banners",
     "extract_document_metadata",
+    "extract_metadata_for_document",
+    "extract_metadata_from_markdown",
     "fetch_metadata_by_doi",
     "fetch_metadata_by_pii",
     "is_valid_title",
@@ -600,3 +896,4 @@ __all__ = [
     "repair_invalid_documents",
     "zotero_filename_metadata",
 ]
+
