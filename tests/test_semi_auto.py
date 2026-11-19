@@ -284,3 +284,84 @@ def test_parse_reply_accepts_single_card_alias_and_scalar_cleanup():
     assert "z_num" in card.conditions.unknown_fields
     assert "conditions.j_parity" in card.conditions.unknown_fields
     assert results["DOC-1-1"].cards[0].card_type == "STRAT"
+
+
+def test_regenerate_batches_preserves_imported_and_rechunks_pending(tmp_path: Path):
+    from models.semi_auto import regenerate_batches
+
+    db = _db(tmp_path)
+    try:
+        doc_id = _document(tmp_path, db, count=30)
+        document = db.get_document(doc_id)
+        assert document is not None
+
+        # 1. Initially create with small budget 2500 -> multiple batches
+        manifest = create_run(
+            db,
+            tmp_path / "workspace",
+            [document],
+            pipeline=None,
+            max_batch_tokens=2_500,
+            mode="force",
+        )
+        initial_batches = manifest["batches"]
+        assert len(initial_batches) >= 3
+
+        # 2. Import reply for the first batch
+        first_batch = initial_batches[0]
+        items_0 = json.loads(
+            (
+                tmp_path / "workspace" / "semi_auto" / manifest["run_id"]
+                / first_batch["items_path"]
+            ).read_text(encoding="utf-8")
+        )
+        res = import_reply(
+            tmp_path / "workspace", manifest, first_batch, _reply(items_0)
+        )
+        assert res["status"] == "IMPORTED"
+
+        # 3. Regenerate with larger budget 20_000 -> fewer batches total
+        new_manifest = regenerate_batches(
+            db,
+            tmp_path / "workspace",
+            manifest,
+            max_batch_tokens=20_000,
+        )
+        new_batches = new_manifest["batches"]
+        # Batch 01 must be preserved and still IMPORTED!
+        assert new_batches[0]["batch_id"] == "BATCH_01"
+        assert new_batches[0]["status"] == "IMPORTED"
+        assert new_batches[0]["reply_path"] == "batch_01/reply.txt"
+        assert (
+            tmp_path / "workspace" / "semi_auto" / manifest["run_id"]
+            / "batch_01" / "reply.txt"
+        ).is_file()
+
+        # The rest of batches should be pending with larger chunk sizes, so fewer total batches
+        assert len(new_batches) < len(initial_batches)
+        # All 30 items must be preserved across batches without loss or duplication!
+        all_item_ids = []
+        for b in new_batches:
+            all_item_ids.extend(b["item_ids"])
+        assert len(all_item_ids) == 30
+        assert len(set(all_item_ids)) == 30
+
+        # 4. Now test deleting an imported batch and regenerating again
+        delete_batch(tmp_path / "workspace", new_manifest, "BATCH_01")
+        assert len(new_manifest["batches"]) == len(new_batches) - 1
+
+        regen_after_delete = regenerate_batches(
+            db,
+            tmp_path / "workspace",
+            new_manifest,
+            max_batch_tokens=20_000,
+        )
+        # All 30 items must be restored and accounted for!
+        all_ids_after = []
+        for b in regen_after_delete["batches"]:
+            all_ids_after.extend(b["item_ids"])
+        assert len(all_ids_after) == 30
+        assert len(set(all_ids_after)) == 30
+    finally:
+        db.close()
+

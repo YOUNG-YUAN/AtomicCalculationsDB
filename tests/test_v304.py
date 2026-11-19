@@ -149,3 +149,57 @@ def test_dialog_window_controls_and_minmax_flags(qapp, tmp_path):
     parent.close()
 
 
+def test_semi_auto_dialog_budget_editable_and_regenerate(qapp, tmp_path, monkeypatch):
+    from unittest.mock import MagicMock
+    from PySide6.QtWidgets import QMessageBox
+    from db.sqlite_manager import SQLiteManager
+    from models.semi_auto import create_run
+    from ui.semi_auto_dialog import SemiAutoBatchDialog
+    from tests.test_semi_auto import _document
+
+    db = SQLiteManager(tmp_path / "workspace", embedding_signature="test::dim=4")
+    try:
+        doc_id = _document(tmp_path, db, count=20)
+        document = db.get_document(doc_id)
+        assert document is not None
+
+        # 1. Create run
+        manifest = create_run(
+            db,
+            tmp_path / "workspace",
+            [document],
+            pipeline=None,
+            max_batch_tokens=5_000,
+            mode="force",
+        )
+        assert len(manifest["batches"]) >= 2
+
+        # 2. Open dialog
+        dlg = SemiAutoBatchDialog(
+            db,
+            tmp_path / "workspace",
+            pipeline=None,
+            doc_ids=[doc_id],
+            mode="force",
+        )
+        # Budget MUST be enabled even after batches exist!
+        assert dlg.budget.isEnabled() is True
+        assert dlg.budget.value() == 5_000
+
+        # Change budget to 15_000
+        dlg.budget.setValue(15_000)
+        assert dlg.manifest["max_batch_tokens"] == 15_000
+
+        # Click regenerate: mock QMessageBox.question to return Yes
+        monkeypatch.setattr(QMessageBox, "question", lambda *args, **kwargs: QMessageBox.Yes)
+        dlg._generate()
+
+        assert dlg.manifest["max_batch_tokens"] == 15_000
+        # Fewer batches now
+        assert len(dlg.manifest["batches"]) <= len(manifest["batches"])
+        dlg.close()
+    finally:
+        db.close()
+
+
+

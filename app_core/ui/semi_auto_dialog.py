@@ -42,6 +42,7 @@ from models.semi_auto import (
     import_reply,
     list_runs,
     read_prompt,
+    regenerate_batches,
     semi_auto_root,
 )
 from ui.controls import WheelSafeSpinBox
@@ -259,6 +260,7 @@ class SemiAutoBatchDialog(QDialog):
         self.budget.setSingleStep(5_000)
         self.budget.setMaximumWidth(150)
         self.budget.setValue(self._default_budget())
+        self.budget.valueChanged.connect(self._on_budget_changed)
         controls.addWidget(self.budget)
 
         controls.addWidget(QLabel("处理模型:"))
@@ -384,6 +386,20 @@ class SemiAutoBatchDialog(QDialog):
         if self.manifest:
             self.manifest["agent_model"] = self.current_agent_model
 
+    def _on_budget_changed(self, value: int) -> None:
+        if self.manifest and str(self.manifest.get("status")).upper() != "FINALIZED":
+            self.manifest["max_batch_tokens"] = int(value)
+            try:
+                save_run(self.workspace, self.manifest)
+            except Exception:
+                pass
+        if self.config is not None:
+            try:
+                self.config.set("semi_auto.max_batch_tokens", int(value))
+                self.config.save()
+            except Exception:
+                pass
+
     def _default_budget(self) -> int:
         if self.config is not None:
             try:
@@ -476,19 +492,98 @@ class SemiAutoBatchDialog(QDialog):
         worker.deleteLater()
 
     def _generate(self) -> None:
-        if self.manifest and str(self.manifest.get("status")).upper() != "FINALIZED":
+        if self.manifest:
+            status = str(self.manifest.get("status")).upper()
+            if status == "FINALIZED":
+                answer = QMessageBox.question(
+                    self,
+                    "任务已写入知识库",
+                    "当前任务包已成功写入知识库。如需重新提取，请清空后重新开始。\n\n"
+                    "是否清空当前任务包？",
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.No,
+                )
+                if answer == QMessageBox.Yes:
+                    self._clear()
+                return
+
+            batches = list(self.manifest.get("batches") or [])
+            imported_count = sum(
+                1
+                for b in batches
+                if str(b.get("status") or "").upper() == "IMPORTED"
+                or bool(b.get("reply_path"))
+            )
+            pending_count = len(batches) - imported_count
+
+            if batches and imported_count == len(batches):
+                QMessageBox.information(
+                    self,
+                    "提问包已全部导入",
+                    "当前所有提问包均已导入回复，无需重新生成。\n\n"
+                    "若您希望重新生成某个提问包，请先在下方列表中点击该提问包的「删除」按钮，"
+                    "删除后再点击「重新生成提问包」即可重新切分生成。",
+                )
+                return
+
+            new_budget = int(self.budget.value())
+            if imported_count > 0:
+                msg = (
+                    f"当前任务包共 {len(batches)} 份提问包：\n"
+                    f"• 已导入回复：{imported_count} 份（将完整保留，不受影响）\n"
+                    f"• 待导入/未回答：{pending_count} 份（将重新按单包 {new_budget:,} Token 切分打包）\n\n"
+                    f"是否确认重新切分并生成未回答的提问包？"
+                )
+            else:
+                msg = (
+                    f"将按单包 {new_budget:,} Token 重新切分并生成提问包。\n"
+                    f"（当前 {pending_count} 份未回答的提问包将被替换）\n\n"
+                    f"是否继续？"
+                )
+
             answer = QMessageBox.question(
                 self,
                 "重新生成提问包",
-                "重新生成会删除当前尚未写入知识库的任务包和已导入回复，"
-                "但不会改动知识库中的卡片。是否继续？",
+                msg,
                 QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No,
+                QMessageBox.Yes,
             )
             if answer != QMessageBox.Yes:
                 return
-            delete_run(self.workspace, str(self.manifest["run_id"]))
-            self.manifest = None
+
+            self.budget.setEnabled(False)
+            self.parse_button.setEnabled(False)
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+            try:
+                self.manifest = regenerate_batches(
+                    self.db,
+                    self.workspace,
+                    self.manifest,
+                    max_batch_tokens=new_budget,
+                    pipeline=self.pipeline,
+                )
+            except Exception as exc:
+                QMessageBox.warning(self, "重新生成提问包失败", str(exc))
+                return
+            finally:
+                QApplication.restoreOverrideCursor()
+                self.budget.setEnabled(True)
+
+            if self.config is not None:
+                try:
+                    self.config.set("semi_auto.max_batch_tokens", new_budget)
+                    self.config.save()
+                except Exception:
+                    pass
+
+            new_total = len(self.manifest.get("batches") or [])
+            self.status_label.setText(
+                f"已按 {new_budget:,} Token 重新生成！当前共 {new_total} 个提问包（保留已导入 {imported_count} 份）。"
+            )
+            self._render()
+            self.changed.emit()
+            return
+
         if self.mode == "force":
             answer = QMessageBox.question(
                 self,
@@ -665,7 +760,8 @@ class SemiAutoBatchDialog(QDialog):
             self,
             "删除提问包",
             f"确定删除 {batch['batch_id']}？其提示词和已导入回复都会移除，"
-            "该操作不可撤回。",
+            "该操作不可撤回。\n\n"
+            "（提示：删除后点击「重新生成提问包」，可重新按 Token 上限生成该部分未完成的提问包）",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
         )
@@ -938,8 +1034,11 @@ class SemiAutoBatchDialog(QDialog):
             if str(batch.get("status")).upper() == "IMPORTED"
         )
         finalized = str(self.manifest.get("status")).upper() == "FINALIZED"
-        self.budget.setEnabled(finalized)
+        self.budget.setEnabled(not finalized)
         self.generate_button.setText("📦 重新生成提问包")
+        self.generate_button.setToolTip(
+            "按当前单包 Token 上限重新切分并生成未回答的提问包（已导入回复的提问包将完整保留）"
+        )
         title = (
             f"任务包 {self.manifest.get('run_id')} · "
             f"{len(self.manifest.get('documents') or [])} 篇文献 · "

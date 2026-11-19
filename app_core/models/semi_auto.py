@@ -302,6 +302,7 @@ def create_run(
                 "doc_id": str(document.get("doc_id") or ""),
                 "title": str(document.get("title") or ""),
                 "doc_type": str(document.get("doc_type") or ""),
+                "local_pdf_path": str(document.get("local_pdf_path") or ""),
             }
             for document in docs
         ],
@@ -347,6 +348,243 @@ def create_run(
                 "imported_item_ids": [],
             }
         )
+    save_run(workspace, manifest)
+    return manifest
+
+
+def regenerate_batches(
+    db: Any,
+    workspace: str | Path,
+    manifest: dict[str, Any],
+    *,
+    max_batch_tokens: int = DEFAULT_MAX_BATCH_TOKENS,
+    pipeline: Any = None,
+) -> dict[str, Any]:
+    """Regenerate pending batches while preserving all imported batches and their replies.
+
+    - Batches with status == 'IMPORTED' (or having a reply_path) are kept intact.
+    - Pending/unanswered batches are removed.
+    - Any items not yet covered by kept imported batches are re-partitioned
+      into new batches according to `max_batch_tokens`.
+    - Batches are re-slotted sequentially (1, 2, ..., N) in document and item order.
+    """
+    workspace = Path(workspace)
+    run_id = str(manifest.get("run_id") or "")
+    if not run_id:
+        raise SemiAutoError("任务包不存在 run_id")
+    root = _run_dir(workspace, run_id)
+    if not root.is_dir():
+        raise SemiAutoError(f"任务包目录不存在：{root}")
+
+    force = str(manifest.get("mode", "force")).lower() == "force"
+    budget = max(2048, int(max_batch_tokens))
+    node = EndpointNode(
+        node_id="semi-auto-batch",
+        name="网页 AI 半自动批量",
+        node_type="OPENAI_COMPATIBLE_API",
+        capabilities=["TEXT_LLM"],
+        max_input_tokens=budget,
+        max_output_tokens=min(64_000, max(8_000, budget // 2)),
+        max_items_per_batch=500,
+    )
+
+    batches = list(manifest.get("batches") or [])
+    imported_batches: list[dict[str, Any]] = []
+    pending_batches: list[dict[str, Any]] = []
+
+    for b in batches:
+        has_reply = bool(b.get("reply_path")) or str(b.get("status") or "").upper() == "IMPORTED"
+        if has_reply:
+            imported_batches.append(dict(b))
+        else:
+            pending_batches.append(dict(b))
+
+    covered_item_ids: set[str] = set()
+    for b in imported_batches:
+        ids = b.get("item_ids") or b.get("imported_item_ids") or []
+        covered_item_ids.update(str(x) for x in ids)
+
+    docs = list(manifest.get("documents") or [])
+    new_doc_packets: list[tuple[dict[str, Any], Any]] = []
+
+    for document in docs:
+        doc_id = str(document.get("doc_id") or "")
+        full_doc = db.get_document(doc_id) if db else None
+        doc_info = dict(full_doc) if full_doc else dict(document)
+        if not doc_info.get("local_pdf_path") and document.get("local_pdf_path"):
+            doc_info["local_pdf_path"] = document.get("local_pdf_path")
+        try:
+            doc_items = _document_items(db, workspace, doc_info, force=force)
+        except SemiAutoError:
+            continue
+        if not doc_items:
+            continue
+
+        remaining_items = [
+            it for it in doc_items if str(it.item_id) not in covered_item_ids
+        ]
+        if not remaining_items:
+            continue
+
+        doc_manual = str(doc_info.get("doc_type") or "").upper() in MANUAL_DOC_TYPES
+        doc_system = CARD_SYSTEM_PROMPT.replace("{doc_id}", doc_id)
+        if doc_manual:
+            doc_system += "\n\n" + MANUAL_MODE_INSTRUCTION
+        doc_premise = _premise([doc_info], len(remaining_items))
+        packer = DynamicBatchPacker(
+            system_prompt=doc_system,
+            global_premise=doc_premise,
+        )
+        service = ClipboardBatchService(packer)
+        try:
+            pkts = service.build_packets(
+                remaining_items,
+                node,
+                system_prompt=doc_system,
+                global_premise=doc_premise,
+            )
+            for pkt in pkts:
+                new_doc_packets.append((doc_info, pkt))
+        except Exception as exc:
+            raise SemiAutoError(f"生成文献 {doc_id} 提问包失败：{exc}") from exc
+
+    if not new_doc_packets and not pending_batches:
+        manifest["max_batch_tokens"] = budget
+        save_run(workspace, manifest)
+        return manifest
+
+    # Clean up disk
+    for b in pending_batches:
+        slot = int(b.get("slot") or 0)
+        p_dir = root / f"batch_{slot:02d}"
+        shutil.rmtree(p_dir, ignore_errors=True)
+
+    temp_stage = root / "_temp_imported_stage"
+    temp_stage.mkdir(parents=True, exist_ok=True)
+    for idx, b in enumerate(imported_batches):
+        old_slot = int(b.get("slot") or 0)
+        old_dir = root / f"batch_{old_slot:02d}"
+        stage_dir = temp_stage / f"imported_{idx:03d}"
+        if old_dir.is_dir():
+            shutil.move(str(old_dir), str(stage_dir))
+        b["_stage_dir"] = stage_dir
+
+    def _item_seq(item_id: str) -> int:
+        try:
+            return int(str(item_id).rsplit("-", 1)[-1])
+        except Exception:
+            return 0
+
+    all_ordered_entries: list[tuple[str, Any]] = []
+
+    for document in docs:
+        doc_id = str(document.get("doc_id") or "")
+        doc_entries: list[tuple[int, str, Any]] = []
+
+        for b in imported_batches:
+            b_docs = [str(x) for x in b.get("doc_ids") or []]
+            if doc_id in b_docs:
+                first_item = (b.get("item_ids") or ["0"])[0]
+                seq = _item_seq(first_item)
+                doc_entries.append((seq, "imported", b))
+
+        for doc_info, pkt in new_doc_packets:
+            p_doc_id = str(doc_info.get("doc_id") or "")
+            if p_doc_id == doc_id:
+                first_item = pkt.batch.items[0].item_id if pkt.batch.items else "0"
+                seq = _item_seq(first_item)
+                doc_entries.append((seq, "new", (doc_info, pkt)))
+
+        doc_entries.sort(key=lambda x: x[0])
+        for _, kind, val in doc_entries:
+            all_ordered_entries.append((kind, val))
+
+    doc_ids_set = {str(d.get("doc_id") or "") for d in docs}
+    for b in imported_batches:
+        b_docs = {str(x) for x in b.get("doc_ids") or []}
+        if not (b_docs & doc_ids_set):
+            all_ordered_entries.append(("imported", b))
+
+    final_batches: list[dict[str, Any]] = []
+    for slot, (kind, val) in enumerate(all_ordered_entries, start=1):
+        batch_id = f"BATCH_{slot:02d}"
+        batch_dir = root / f"batch_{slot:02d}"
+        if kind == "imported":
+            b = val
+            stage_dir = b.pop("_stage_dir", None)
+            if stage_dir and stage_dir.is_dir():
+                shutil.move(str(stage_dir), str(batch_dir))
+            old_slot = int(b.get("slot") or 0)
+            b["slot"] = slot
+            b["batch_id"] = batch_id
+            b["prompt_path"] = f"batch_{slot:02d}/prompt.txt"
+            b["items_path"] = f"batch_{slot:02d}/items.json"
+            if b.get("reply_path"):
+                b["reply_path"] = f"batch_{slot:02d}/reply.txt"
+
+            prompt_file = batch_dir / "prompt.txt"
+            if prompt_file.is_file() and old_slot != slot:
+                try:
+                    txt = prompt_file.read_text(encoding="utf-8")
+                    import re
+                    new_txt = re.sub(
+                        r"^【提问包】BATCH_\d+ · 槽位 \d+",
+                        f"【提问包】{batch_id} · 槽位 {slot:02d}",
+                        txt,
+                        count=1,
+                    )
+                    prompt_file.write_text(new_txt, encoding="utf-8")
+                except Exception:
+                    pass
+
+            final_batches.append(b)
+        else:
+            doc_info, packet = val
+            batch_dir.mkdir(parents=True, exist_ok=True)
+            prompt_path = batch_dir / "prompt.txt"
+            prompt_text = (
+                f"【提问包】{batch_id} · 槽位 {slot:02d}（共 {len(packet.batch.items)} 个待提炼证据片段）\n\n"
+                + packet.prompt
+            )
+            prompt_path.write_text(prompt_text, encoding="utf-8")
+            batch_items = []
+            for item in packet.batch.items:
+                metadata = item.metadata or {}
+                batch_items.append(
+                    {
+                        "item_id": item.item_id,
+                        "doc_id": str(metadata.get("doc_id") or ""),
+                        "bundle": metadata.get("bundle") or {},
+                    }
+                )
+            items_path = batch_dir / "items.json"
+            _write_json(items_path, batch_items)
+            final_batches.append(
+                {
+                    "batch_id": batch_id,
+                    "slot": slot,
+                    "item_ids": [item.item_id for item in packet.batch.items],
+                    "doc_ids": [str(doc_info.get("doc_id") or "")],
+                    "doc_title": str(doc_info.get("title") or ""),
+                    "album_pdf_path": str(doc_info.get("local_pdf_path") or ""),
+                    "estimated_tokens": int(packet.batch.input_tokens),
+                    "status": "PENDING",
+                    "prompt_path": f"batch_{slot:02d}/prompt.txt",
+                    "items_path": f"batch_{slot:02d}/items.json",
+                    "reply_path": "",
+                    "imported_item_ids": [],
+                }
+            )
+
+    shutil.rmtree(temp_stage, ignore_errors=True)
+
+    manifest["batches"] = final_batches
+    manifest["max_batch_tokens"] = budget
+    manifest["status"] = (
+        "READY"
+        if final_batches and all(str(b.get("status")).upper() == "IMPORTED" for b in final_batches)
+        else "WAITING"
+    )
     save_run(workspace, manifest)
     return manifest
 
@@ -720,6 +958,7 @@ __all__ = [
     "load_run",
     "read_items",
     "read_prompt",
+    "regenerate_batches",
     "save_run",
     "semi_auto_root",
 ]
