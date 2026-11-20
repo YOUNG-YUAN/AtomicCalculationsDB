@@ -28,7 +28,7 @@ def _ensure_mcp_stdio() -> None:
     bootloader normally replaces stdio with ``None``.  Re-open the inherited
     file descriptors; when launched from a console, attach to it as a fallback.
     """
-    if not any(arg in ("--mcp", "--mcp-sse") for arg in sys.argv[1:]):
+    if not any(arg in ("--mcp", "--mcp-sse", "agent") for arg in sys.argv[1:]):
         return
     if sys.stdin is not None and sys.stdout is not None:
         return

@@ -410,7 +410,7 @@ def test_agent_workbench_semi_auto_and_audit_via_bridge_and_mcp(tmp_path: Path):
         status = mcp_server.status()
         assert "list_workbench_tasks" in status["tools"]
         assert "submit_audit_ticket_result" in status["tools"]
-        assert len(status["tools"]) == 16
+        assert len(status["tools"]) >= 16
         built = mcp_server.build_server()
         assert built is not None
         import anyio

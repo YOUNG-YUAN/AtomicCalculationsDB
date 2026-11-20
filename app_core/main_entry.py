@@ -7,6 +7,7 @@ Normal launch starts the Qt GUI + night worker + inbox watcher.
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import shutil
@@ -190,17 +191,193 @@ def _init_services(base: Path, config: AppConfig) -> dict:
 
 
 def _parse_cli(argv: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("--mcp", action="store_true")
-    parser.add_argument("--mcp-sse", dest="mcp_sse", action="store_true")
-    parser.add_argument("--host", default=None)
-    parser.add_argument("--port", type=int, default=None)
+    parser = argparse.ArgumentParser(prog="AtomicCalculationDB", add_help=True)
+    parser.add_argument("--base", default=None, help="Release root directory")
+    parser.add_argument("--workspace", default=None, help="Workspace directory")
+    parser.add_argument("--mcp", action="store_true", help="Start MCP stdio server")
+    parser.add_argument("--mcp-sse", dest="mcp_sse", action="store_true", help="Start MCP SSE server")
+    parser.add_argument("--host", default=None, help="Host for MCP server")
+    parser.add_argument("--port", type=int, default=None, help="Port for MCP server")
+
+    subparsers = parser.add_subparsers(dest="subcommand", help="Subcommand to execute")
+    agent_parser = subparsers.add_parser("agent", help="AI Agent CLI operations")
+    agent_sub = agent_parser.add_subparsers(dest="agent_action", help="Agent action")
+
+    # agent export <doc_id> [--out-dir <dir>] [--force]
+    export_p = agent_sub.add_parser("export", help="Export decoupled task bundle for a document")
+    export_p.add_argument("doc_id", help="Document ID (e.g. DOC-PAP-0000-E284F0)")
+    export_p.add_argument("--out-dir", dest="out_dir", default=None, help="Output directory")
+    export_p.add_argument("--force", action="store_true", help="Force re-parsing if needed")
+
+    # agent submit <doc_id> [result_file] [--json <json_str>] [--agent-name <name>] [--agent-model <model>]
+    submit_p = agent_sub.add_parser("submit", help="Submit extraction results to DB")
+    submit_p.add_argument("doc_id", help="Document ID")
+    submit_p.add_argument(
+        "result_file",
+        nargs="?",
+        default=None,
+        help="Path to result.json (defaults to workspace/agent_tasks/<doc_id>/result.json)",
+    )
+    submit_p.add_argument("--json", dest="result_json", default=None, help="Direct JSON string of results")
+    submit_p.add_argument("--agent-name", default="agent", help="Agent identifier name")
+    submit_p.add_argument("--agent-model", default="", help="Model name used by agent")
+
+    # agent status <doc_id>
+    status_p = agent_sub.add_parser("status", help="Get agent task status for a document")
+    status_p.add_argument("doc_id", help="Document ID")
+
     args, _unknown = parser.parse_known_args(argv[1:])
+    for idx, token in enumerate(argv):
+        if token == "--base" and idx + 1 < len(argv) and getattr(args, "base", None) is None:
+            setattr(args, "base", argv[idx + 1])
+        elif token == "--workspace" and idx + 1 < len(argv) and getattr(args, "workspace", None) is None:
+            setattr(args, "workspace", argv[idx + 1])
     return args
 
 
+def _close_services(services: dict) -> None:
+    for key in ("watcher", "worker", "qdrant", "db"):
+        obj = services.get(key)
+        if obj is not None and hasattr(obj, "close"):
+            try:
+                obj.close()
+            except Exception:
+                pass
+
+
+def _run_agent_cli(base: Path, config: AppConfig, args: argparse.Namespace) -> int:
+    action = getattr(args, "agent_action", None)
+    if not action:
+        print("Error: Missing agent action (export, submit, status). Run with --help for details.", file=sys.stderr)
+        return 2
+
+    workspace = Path(args.workspace).resolve() if getattr(args, "workspace", None) else (base / "workspace")
+    bridge = RuntimeBridgeClient.discover(workspace)
+
+    # 1. Action: export
+    if action == "export":
+        doc_id = str(args.doc_id or "").strip()
+        out_dir = str(args.out_dir or "").strip() or None
+        force = bool(getattr(args, "force", False))
+        try:
+            res = None
+            if bridge is not None:
+                log.info("Runtime bridge detected at %s (pid %s); delegating export", bridge.base_url, bridge.pid)
+                try:
+                    res = BridgeWorkbench(bridge).export_agent_task_bundle(doc_id, out_dir=out_dir, force=force)
+                except Exception as b_exc:
+                    log.warning("Bridge delegation failed (%s), falling back to direct service execution", b_exc)
+                    res = None
+            if res is None:
+                services = _init_services(base, config)
+                try:
+                    res = services["workbench"].export_agent_task_bundle(doc_id, out_dir=out_dir, force=force)
+                finally:
+                    _close_services(services)
+            print(json.dumps(res, ensure_ascii=False, indent=2))
+            return 0 if res.get("ok") else 1
+        except Exception as exc:
+            print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False, indent=2), file=sys.stderr)
+            return 1
+
+    # 2. Action: submit
+    elif action == "submit":
+        doc_id = str(args.doc_id or "").strip()
+        result_file = getattr(args, "result_file", None)
+        result_json = getattr(args, "result_json", None)
+        agent_name = str(getattr(args, "agent_name", "agent") or "agent")
+        agent_model = str(getattr(args, "agent_model", "") or "")
+
+        payload_source: str | Path | dict[str, Any]
+        if result_json:
+            payload_source = result_json
+        elif result_file:
+            target_path = Path(result_file)
+            if not target_path.is_file():
+                print(
+                    json.dumps({"ok": False, "error": f"Result file not found: {result_file}"}, ensure_ascii=False),
+                    file=sys.stderr,
+                )
+                return 1
+            payload_source = target_path
+        else:
+            default_path = workspace / "agent_tasks" / doc_id / "result.json"
+            if default_path.is_file():
+                payload_source = default_path
+            else:
+                print(
+                    json.dumps(
+                        {"ok": False, "error": f"No result file provided and default {default_path} not found"},
+                        ensure_ascii=False,
+                    ),
+                    file=sys.stderr,
+                )
+                return 1
+
+        try:
+            res = None
+            if bridge is not None:
+                log.info("Runtime bridge detected at %s (pid %s); delegating submit", bridge.base_url, bridge.pid)
+                if isinstance(payload_source, Path):
+                    payload_source = payload_source.read_text(encoding="utf-8")
+                try:
+                    res = BridgeWorkbench(bridge).submit_agent_task_result(
+                        doc_id,
+                        payload_source,
+                        agent_name=agent_name,
+                        agent_model=agent_model,
+                    )
+                except Exception as b_exc:
+                    log.warning("Bridge delegation failed (%s), falling back to direct service execution", b_exc)
+                    res = None
+            if res is None:
+                services = _init_services(base, config)
+                try:
+                    res = services["workbench"].submit_agent_task_result(
+                        doc_id,
+                        payload_source,
+                        agent_name=agent_name,
+                        agent_model=agent_model,
+                    )
+                finally:
+                    _close_services(services)
+            print(json.dumps(res, ensure_ascii=False, indent=2))
+            return 0 if res.get("ok") else 1
+        except Exception as exc:
+            print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False, indent=2), file=sys.stderr)
+            return 1
+
+    # 3. Action: status
+    elif action == "status":
+        doc_id = str(args.doc_id or "").strip()
+        try:
+            res = None
+            if bridge is not None:
+                log.info("Runtime bridge detected at %s (pid %s); delegating status", bridge.base_url, bridge.pid)
+                try:
+                    res = BridgeWorkbench(bridge).get_agent_task_status(doc_id)
+                except Exception as b_exc:
+                    log.warning("Bridge delegation failed (%s), falling back to direct service execution", b_exc)
+                    res = None
+            if res is None:
+                services = _init_services(base, config)
+                try:
+                    res = services["workbench"].get_agent_task_status(doc_id)
+                finally:
+                    _close_services(services)
+            print(json.dumps(res, ensure_ascii=False, indent=2))
+            return 0 if res.get("ok") else 1
+        except Exception as exc:
+            print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False, indent=2), file=sys.stderr)
+            return 1
+
+    else:
+        print(f"Error: Unknown agent action: {action}", file=sys.stderr)
+        return 2
+
+
 def _run_mcp(base: Path, config: AppConfig, args: argparse.Namespace) -> int:
-    workspace = base / "workspace"
+    workspace = Path(args.workspace).resolve() if getattr(args, "workspace", None) else (base / "workspace")
     bridge = RuntimeBridgeClient.discover(workspace)
     if bridge is not None:
         # A running GUI owns Qdrant; proxy every tool call to its live retriever
@@ -255,11 +432,19 @@ def start_gui_app(base_dir: str) -> int:
         getattr(sys, "_MEIPASS", str(base / "app_core")),
     )
     args = _parse_cli(sys.argv)
-    workspace = base / "workspace"
+    if getattr(args, "base", None):
+        base = Path(args.base).resolve()
+    if getattr(args, "workspace", None):
+        workspace = Path(args.workspace).resolve()
+    else:
+        workspace = base / "workspace"
     config = _load_config(workspace)
 
     if args.mcp or args.mcp_sse:
         return _run_mcp(base, config, args)
+
+    if getattr(args, "subcommand", None) == "agent":
+        return _run_agent_cli(base, config, args)
 
     services = _init_services(base, config)
     db = services["db"]
@@ -391,3 +576,13 @@ def start_gui_app(base_dir: str) -> int:
         return int(app.exec())
     finally:
         cleanup()
+
+
+def main(argv: list[str] | None = None) -> int:
+    release_root = os.environ.get("ACDB_RELEASE_ROOT", "").strip()
+    if release_root:
+        base = Path(release_root).resolve()
+    else:
+        base = Path(__file__).resolve().parent.parent
+    return start_gui_app(str(base))
+

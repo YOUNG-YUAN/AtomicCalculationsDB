@@ -71,6 +71,11 @@ class KnowledgeMCPServer:
                     "export_document_audit_ticket",
                     "get_audit_ticket_content",
                     "submit_audit_ticket_result",
+                    "export_deep_synthesis_task",
+                    "submit_deep_synthesis_result",
+                    "export_agent_task_bundle",
+                    "submit_agent_task_result",
+                    "get_agent_task_status",
                 ]
             )
         return {
@@ -304,6 +309,40 @@ class KnowledgeMCPServer:
                 agent_model=agent_model,
                 apply_to_db=apply_to_db,
             )
+
+        @server.tool()
+        def export_agent_task_bundle(
+            doc_id: str,
+            out_dir: str = "",
+            force: bool = False,
+        ) -> str:
+            """Export a self-explaining, decoupled task bundle folder for Agent processing (items.json, tables, schema)."""
+            kwargs: dict[str, Any] = {"doc_id": doc_id, "force": force}
+            if out_dir:
+                kwargs["out_dir"] = out_dir
+            return _wb_call("export_agent_task_bundle", **kwargs)
+
+        @server.tool()
+        def submit_agent_task_result(
+            doc_id: str,
+            result_json: str,
+            agent_name: str = "antigravity",
+            agent_model: str = "",
+        ) -> str:
+            """Submit Agent task extraction results (validates schema, creates L2 cards, updates status)."""
+            return _wb_call(
+                "submit_agent_task_result",
+                doc_id=doc_id,
+                result_path_or_json=result_json,
+                agent_name=agent_name,
+                agent_model=agent_model,
+            )
+
+        @server.tool()
+        def get_agent_task_status(doc_id: str) -> str:
+            """Check status of an agent task folder and doc extraction progress."""
+            return _wb_call("get_agent_task_status", doc_id=doc_id)
+
 
         return server
 

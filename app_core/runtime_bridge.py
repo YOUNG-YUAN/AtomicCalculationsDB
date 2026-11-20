@@ -305,6 +305,9 @@ class RuntimeBridgeServer:
                 "submit_audit_ticket_result",
                 "export_deep_synthesis_task",
                 "submit_deep_synthesis_result",
+                "export_agent_task_bundle",
+                "submit_agent_task_result",
+                "get_agent_task_status",
             }
             if action not in allowed:
                 raise BridgeUnavailable(f"unsupported workbench action: {action}")
@@ -352,7 +355,13 @@ class RuntimeBridgeClient:
             version=str(data.get("version") or ""),
             pid=int(data.get("pid") or 0),
         )
-        return client if client.alive() else None
+        if not client.alive():
+            try:
+                bridge_file(workspace).unlink(missing_ok=True)
+            except Exception:
+                pass
+            return None
+        return client
 
     @property
     def base_url(self) -> str:
@@ -365,7 +374,12 @@ class RuntimeBridgeClient:
             import httpx
 
             response = httpx.get(self.base_url + "/health", timeout=0.8)
-            return response.status_code == 200 and bool(response.json().get("ok"))
+            if response.status_code != 200 or not bool(response.json().get("ok")):
+                return False
+            returned_pid = response.json().get("pid")
+            if self.pid and returned_pid and int(self.pid) != int(returned_pid):
+                return False
+            return True
         except Exception:
             return False
 
@@ -559,6 +573,40 @@ class BridgeWorkbench:
             agent_model=agent_model,
             apply_to_db=apply_to_db,
         )
+
+    def export_agent_task_bundle(
+        self,
+        doc_id: str,
+        *,
+        out_dir: str | None = None,
+        force: bool = False,
+    ) -> dict[str, Any]:
+        return self._call(
+            "export_agent_task_bundle",
+            doc_id=doc_id,
+            out_dir=out_dir,
+            force=force,
+        )
+
+    def submit_agent_task_result(
+        self,
+        doc_id: str,
+        result_path_or_json: str | dict[str, Any],
+        *,
+        agent_name: str = "antigravity",
+        agent_model: str = "",
+    ) -> dict[str, Any]:
+        return self._call(
+            "submit_agent_task_result",
+            doc_id=doc_id,
+            result_path_or_json=result_path_or_json,
+            agent_name=agent_name,
+            agent_model=agent_model,
+        )
+
+    def get_agent_task_status(self, doc_id: str) -> dict[str, Any]:
+        return self._call("get_agent_task_status", doc_id=doc_id)
+
 
 
 def _now() -> str:

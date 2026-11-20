@@ -503,3 +503,170 @@ def test_restructured_question_packets():
     assert "[表格附件 1]" in prompt
     assert "| Level | Energy |" in prompt
 
+
+def test_agent_task_packager_export_and_submit(tmp_path):
+    from db.sqlite_manager import SQLiteManager
+    from parser.context_bundler import ContextBundle
+    from sync_mcp.agent_task_packager import AgentTaskPackager
+    from models.atomic_prompts import ExtractionResult, KnowledgeCardDraft
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    db = SQLiteManager(workspace)
+
+    doc_id = "DOC-PAP-2024-A1B2C3"
+    storage_dir = workspace / "storage" / doc_id
+    storage_dir.mkdir(parents=True)
+    pdf_file = storage_dir / "paper.pdf"
+    pdf_file.write_bytes(b"%PDF-1.4 test")
+
+    parsed_md = storage_dir / "parsed.md"
+    parsed_md.write_text("# Test Paper\n\nDiscussion on Dirac-Fock calculations in Table 1.", encoding="utf-8")
+
+    parsed_tables = storage_dir / "parsed_tables.json"
+    parsed_tables.write_text(
+        json.dumps([
+            {"caption": "Table 1. Calculated energy levels.", "markdown": "| Level | Energy |\n| --- | --- |\n| 1 | 0.0 |\n| 2 | 10.5 |\n"}
+        ]),
+        encoding="utf-8"
+    )
+
+    bundle = ContextBundle(
+        doc_id=doc_id,
+        section_path="Methods > Dirac-Fock",
+        focal_sentence="We report energies in Table 1.",
+        focal_window_markdown="As detailed in Table 1, the energies are calculated using Dirac-Fock.",
+    )
+    bundles_file = storage_dir / "bundles.json"
+    bundles_file.write_text(json.dumps([bundle.model_dump(mode="json")]), encoding="utf-8")
+
+    db.upsert_document({
+        "doc_id": doc_id,
+        "title": "Test Atomic Paper for Agent",
+        "doc_type": "PAP",
+        "pub_year": 2024,
+        "local_pdf_path": str(pdf_file.relative_to(workspace)),
+        "parse_status": "LIGHT_PARSED",
+    })
+
+    pipeline = MagicMock()
+    pipeline._store_draft.return_value = "KNW-TEST-001"
+
+    packager = AgentTaskPackager(db, workspace, pipeline=pipeline)
+
+    # 1. Export
+    export_res = packager.export_task_bundle(doc_id)
+    assert export_res["ok"] is True
+    assert export_res["doc_id"] == doc_id
+    assert export_res["item_count"] == 1
+    assert export_res["table_count"] == 1
+
+    task_dir = workspace / "agent_tasks" / doc_id
+    assert task_dir.is_dir()
+    assert (task_dir / "task_instructions.md").is_file()
+    assert (task_dir / "items.json").is_file()
+    assert (task_dir / "schema.json").is_file()
+    assert (task_dir / "parsed.md").is_file()
+    assert (task_dir / "tables" / "Table_1.md").is_file()
+
+    # Verify instructions and items content
+    instr = (task_dir / "task_instructions.md").read_text(encoding="utf-8")
+    assert doc_id in instr
+    assert "Test Atomic Paper for Agent" in instr
+    assert "tables/Table_1.md" in instr
+
+    items_data = json.loads((task_dir / "items.json").read_text(encoding="utf-8"))
+    assert len(items_data) == 1
+    assert items_data[0]["item_id"] == f"{doc_id}-0"
+    assert items_data[0]["table_refs"] == ["1"]
+    assert items_data[0]["table_files"] == ["tables/Table_1.md"]
+
+    # 2. Check Status
+    status_res = packager.get_task_status(doc_id)
+    assert status_res["ok"] is True
+    assert status_res["has_task_bundle"] is True
+    assert status_res["item_count"] == 1
+    assert status_res["has_result_json"] is False
+
+    # 3. Submit Result
+    card_draft = KnowledgeCardDraft(
+        card_type="MODEL",
+        title_zh="Dirac-Fock 方法与能级计算",
+        summary_zh="计算采用相对论 Dirac-Fock 方法，能量为 10.5 eV",
+        premises_and_conditions="适用于类氖离子基态与激发态能级计算",
+        confidence=0.95,
+        element="Fe",
+        ion_stage="Fe XVII",
+        method="Dirac-Fock",
+        code_name="GRASP",
+    )
+    result_payload = {
+        "items": [
+            {
+                "item_id": f"{doc_id}-0",
+                "result": {
+                    "skip": False,
+                    "cards": [card_draft.model_dump(mode="json")],
+                    "keywords": ["Dirac-Fock", "Fe XVII"],
+                }
+            }
+        ]
+    }
+
+    submit_res = packager.submit_task_result(
+        doc_id,
+        result_payload,
+        agent_name="CodexAgent",
+        agent_model="gpt-5-codex",
+    )
+    assert submit_res["ok"] is True
+    assert submit_res["processed_items"] == 1
+    assert submit_res["stored_cards"] == 1
+    assert submit_res["stored_keywords"] == 2
+    assert submit_res["skipped_items"] == 0
+
+    # Verify pipeline was called
+    pipeline._store_draft.assert_called_once()
+
+    # Verify doc status in DB is now LLM_EXTRACTED
+    doc_after = db.get_document(doc_id)
+    assert doc_after["parse_status"] == "LLM_EXTRACTED"
+
+
+def test_agent_workbench_and_cli_dispatch(tmp_path):
+    from db.sqlite_manager import SQLiteManager
+    from sync_mcp.agent_workbench import AgentWorkbenchService
+    from main_entry import _parse_cli, _run_agent_cli
+    from config import AppConfig
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    config = AppConfig(path=workspace / "config.yaml")
+    config.set("mcp.allow_task_write", True)
+    config.save()
+
+    doc_id = "DOC-PAP-2023-B2C3D4"
+    db = SQLiteManager(workspace)
+    db.upsert_document({
+        "doc_id": doc_id,
+        "title": "CLI Test Document",
+        "doc_type": "PAP",
+        "pub_year": 2023,
+    })
+
+    wb = AgentWorkbenchService(db, workspace)
+    status = wb.get_agent_task_status(doc_id)
+    assert status["ok"] is True
+    assert status["doc_id"] == doc_id
+    assert status["has_task_bundle"] is False
+
+    # CLI export test
+    args = _parse_cli(["main.py", "agent", "status", doc_id, "--workspace", str(workspace)])
+    assert args.subcommand == "agent"
+    assert args.agent_action == "status"
+    assert args.doc_id == doc_id
+
+    code = _run_agent_cli(tmp_path, config, args)
+    assert code == 0
+
+

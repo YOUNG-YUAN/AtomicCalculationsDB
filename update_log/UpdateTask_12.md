@@ -32,6 +32,10 @@
 >      2. `【具体提问条目】`（逐条清晰呈现条目上下文、回溯定义与焦点窗口，正文不再掺杂杂乱长表）；
 >      3. `【参考表格附件 (按需调用)】`（仅当包内条目需要表格时在文末独立附带骨架浓缩表，跨条目去重共享）；
 >    - **实测验证 (`DOC-PAP-0000-E284F0`)**：雷达命中数从 479 降至 33，证据包从 175 缩减至 17 个高价值物理条目（50 KB），在 22,000 Token 限额下单文献提问包从 100+ 暴降至 **2 个高质量提问包**！
+> 6. **自主 AI Agent (Codex/Claude Code/Antigravity) 专属任务包与 CLI 自动化工作流**：
+>    - **解耦自解释目录**：生成专属 `workspace/agent_tasks/<DOC-ID>/`，包含 `task_instructions.md`（带物理规则与防坑指南）、`items.json`（按需关联独立表格与图片）、`schema.json`（严格结果结构）、`parsed.md`（全文公式文本）以及 `tables/Table_X.md`；
+>    - **Agent CLI 交互引擎**：支持 `python -m app_core agent export <DOC-ID>` 导出目录、`status <DOC-ID>` 查询任务状态、`submit <DOC-ID> [result.json]` 校验并自动批量入库 L2 知识卡片、关键词并推进状态至 `LLM_EXTRACTED`；
+>    - **GUI 桥接与 MCP 工具联动**：GUI 运行时通过 HTTP 桥无冲突操作（避免 Qdrant/SQLite 锁），GUI 未启动时以 Headless 独立服务执行；同步在 `KnowledgeMCPServer` 中暴露对应 MCP 工具。
 
 ---
 
@@ -160,3 +164,68 @@
   | **提问包总数 (22,000 Token 限额)** | **100+ 个提问包** | **仅 2 个提问包** | **提问包压缩 98%！** |
   | **提问包 #1** | 严重溢出/切片爆炸 | 14 项条目，预估 20,898 Token | 充分利用单包上下文 |
   | **提问包 #2** | 严重溢出/切片爆炸 | 3 项条目，预估 3,123 Token | 轻量快速导入 |
+
+---
+
+## 8. 自主 AI Agent (Codex / Claude Code / Antigravity) 专属自解释任务包与 CLI 自动化工作流
+
+针对 autonomous AI agents（如 Codex、Claude Code、Antigravity 等开发/研究智能体），彻底告别网页端人工分包复制粘贴，构建基于文件系统与命令行驱动的**自解释任务包目录结构**与 **CLI 自动化闭环**：
+
+### 8.1 任务包解耦与目录规范 (`workspace/agent_tasks/<DOC-ID>/`)
+Agent 接收到文献任务时，系统不再需要向上下文直接灌入上百 KB 原始文本，而是生成一个完全解耦、自解释的专属任务工作区目录：
+```text
+workspace/agent_tasks/<DOC-ID>/
+├── task_instructions.md   # 自解释任务指引：物理提取规则、目录使用指南、LaTeX 转义规范
+├── items.json             # 核心物理提炼条目（包含焦点句、上下文窗口、回溯定义、关联表格文件与图片）
+├── schema.json            # 提交结果严格 JSON Schema（对应系统 ExtractionResult）
+├── parsed.md              # 全篇高质量 Markdown 原文（包含完整公式与文本，供 Agent 全文查阅）
+├── tables/                # 骨架脱水后的独立表格 Markdown
+│   ├── Table_1.md
+│   ├── Table_2.md
+│   └── ...
+└── images/                # 关联图表切片图片（若存在）
+    └── ...
+```
+
+### 8.2 核心模块实现与职责划分
+1. **`AgentTaskPackager` (`app_core/sync_mcp/agent_task_packager.py`)**：
+   - `export_task_bundle(doc_id, out_dir=None, force=False)`：自动解析文献、提取并生成 `Table_X.md` 独立表格、复制图像、构建结构化 `items.json` 与 `schema.json`，并撰写包含物理规范的 `task_instructions.md`；
+   - `submit_task_result(doc_id, result_path_or_json, agent_name, agent_model)`：解析并严格校验 Agent 输出，反查证据包（ContextBundle），调用 `pipeline._store_draft` 批量入库 L2 知识卡片与关键词，自动更新文献状态至 `LLM_EXTRACTED` 并记录审计事件；支持字符串关键词智能归一化；
+   - `get_task_status(doc_id)`：快速检测文献任务目录是否存在、条目数量、是否已生成 `result.json` 以及库中已入库卡片统计。
+2. **`AgentWorkbenchService` & `RuntimeBridgeServer` 集成**：
+   - 在工作台接口与运行桥（HTTP Bridge）中增加 `export_agent_task_bundle`、`submit_agent_task_result` 与 `get_agent_task_status` 支持；
+   - 当桌面 GUI 运行时，CLI 自动连接 HTTP Bridge 代理操作，完全避免 SQLite 和 Qdrant 向量库的文件锁与单写者冲突；若桥接不可用，自动安全回退至本地 Headless 独立服务模式。
+3. **`KnowledgeMCPServer` 工具扩展 (`app_core/sync_mcp/mcp_server.py`)**：
+   - 向 Claude Desktop、Cursor、Cherry Studio 等 MCP 客户端原生暴露上述三项任务工单工具。
+
+### 8.3 Agent CLI 交互支持 (`python -m app_core agent` / `AtomicCalculationDB.exe agent`)
+在不启动 Qt 界面图形的情况下，命令行直接支持完整的 Agent 交互：
+- **任务导出**：
+  ```bash
+  python -m app_core agent export DOC-PAP-0000-E284F0
+  ```
+  输出包含任务目录绝对路径与清单统计的 JSON，Agent 可直接基于目录开展分析。
+- **状态查询**：
+  ```bash
+  python -m app_core agent status DOC-PAP-0000-E284F0
+  ```
+- **提炼结果入库**：
+  ```bash
+  # 方式 1：直接提交已生成的 result.json（缺省时自动查找任务目录下的 result.json）
+  python -m app_core agent submit DOC-PAP-0000-E284F0
+  python -m app_core agent submit DOC-PAP-0000-E284F0 path/to/result.json --agent-name Codex --agent-model gpt-5-codex
+
+  # 方式 2：命令行直接传入 JSON 字符串
+  python -m app_core agent submit DOC-PAP-0000-E284F0 --json '{"items": [...]}'
+  ```
+
+---
+
+## 9. 自动化测试与全量验收
+
+- **测试用例总数**：由原 249 项扩展为 **251 项**；
+- **全量回归状态**：`pytest tests/` 251 项测试 100% 全部通过（0 失败，0 错误）；
+- **新增 Agent 专项测试 (`tests/test_v310.py`)**：
+  1. `test_agent_task_packager_export_and_submit`：端到端验证任务目录导出完整性（目录结构、文件存在性、骨架表引用）、状态检查、结果提交（L2 卡片入库、关键词解析、文献状态跃迁至 `LLM_EXTRACTED`）；
+  2. `test_agent_workbench_and_cli_dispatch`：验证命令行解析器对 `agent export/submit/status` 子命令的分发、`--base` 与 `--workspace` 参数穿透以及 Headless 独立服务安全退出。
+

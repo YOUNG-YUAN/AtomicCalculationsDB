@@ -679,6 +679,69 @@ class AgentWorkbenchService:
             "message": "L1 Master 卡片已成功写入数据库并同步向量库，文献进度条已点亮金光！",
         }
 
+    # -------------------------------------------------- agent task bundle (v3.1.0)
+    def export_agent_task_bundle(
+        self,
+        doc_id: str,
+        *,
+        out_dir: str | Path | None = None,
+        force: bool = False,
+    ) -> dict[str, Any]:
+        """Export a self-explaining, decoupled task bundle folder for Agent processing."""
+        self._require_task_write()
+        from sync_mcp.agent_task_packager import AgentTaskPackager
+
+        try:
+            packager = AgentTaskPackager(self.db, self.workspace, pipeline=self.pipeline)
+            return packager.export_task_bundle(doc_id, out_dir=out_dir, force=force)
+        except ValueError as exc:
+            raise WorkbenchInputError(str(exc)) from exc
+        except Exception as exc:
+            log.exception("export_agent_task_bundle failed for %s", doc_id)
+            raise
+
+    def submit_agent_task_result(
+        self,
+        doc_id: str,
+        result_path_or_json: str | dict[str, Any],
+        *,
+        agent_name: str = "antigravity",
+        agent_model: str = "",
+    ) -> dict[str, Any]:
+        """Submit Agent task extraction results (validates schema, creates L2 cards, updates status)."""
+        self._require_task_write()
+        from sync_mcp.agent_task_packager import AgentTaskPackager
+
+        try:
+            packager = AgentTaskPackager(self.db, self.workspace, pipeline=self.pipeline)
+            res = packager.submit_task_result(
+                doc_id,
+                result_path_or_json,
+                agent_name=agent_name,
+                agent_model=agent_model,
+            )
+            self._notify_changed()
+            return res
+        except ValueError as exc:
+            raise WorkbenchInputError(str(exc)) from exc
+        except Exception as exc:
+            log.exception("submit_agent_task_result failed for %s", doc_id)
+            raise
+
+    def get_agent_task_status(self, doc_id: str) -> dict[str, Any]:
+        """Check status of an agent task folder and doc extraction progress."""
+        from sync_mcp.agent_task_packager import AgentTaskPackager
+
+        try:
+            packager = AgentTaskPackager(self.db, self.workspace, pipeline=self.pipeline)
+            return packager.get_task_status(doc_id)
+        except ValueError as exc:
+            raise WorkbenchInputError(str(exc)) from exc
+        except Exception as exc:
+            log.exception("get_agent_task_status failed for %s", doc_id)
+            raise
+
+
 
 __all__ = [
     "AgentWorkbenchService",
