@@ -226,6 +226,16 @@ def _parse_cli(argv: list[str]) -> argparse.Namespace:
     status_p = agent_sub.add_parser("status", help="Get agent task status for a document")
     status_p.add_argument("doc_id", help="Document ID")
 
+    # agent verify <doc_id> [result_file]
+    verify_p = agent_sub.add_parser("verify", help="Verify result.json against items.json and schema")
+    verify_p.add_argument("doc_id", help="Document ID")
+    verify_p.add_argument(
+        "result_file",
+        nargs="?",
+        default=None,
+        help="Path to result.json (defaults to workspace/agent_tasks/<doc_id>/result.json)",
+    )
+
     # agent execute <doc_id> [--interval <sec>] [--model <model>] [--agent-name <name>] [--force] [--no-submit]
     execute_p = agent_sub.add_parser(
         "execute",
@@ -391,7 +401,26 @@ def _run_agent_cli(base: Path, config: AppConfig, args: argparse.Namespace) -> i
             print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False, indent=2), file=sys.stderr)
             return 1
 
-    # 4. Action: execute (with auto-pause and rate-limit polling resilience)
+    # 4. Action: verify (Strict integrity & schema validation without writing to DB)
+    elif action == "verify":
+        doc_id = str(args.doc_id or "").strip()
+        result_file = args.result_file
+        try:
+            services = _init_services(base, config)
+            try:
+                res = services["workbench"].verify_agent_task_result(doc_id, result_file)
+            finally:
+                _close_services(services)
+
+            print(json.dumps(res, ensure_ascii=False, indent=2))
+            if res.get("passed"):
+                return 0
+            return 1
+        except Exception as exc:
+            print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False, indent=2), file=sys.stderr)
+            return 1
+
+    # 5. Action: execute (with auto-pause and rate-limit polling resilience)
     elif action == "execute":
         doc_id = str(args.doc_id or "").strip()
         poll_interval = int(getattr(args, "poll_interval", 300) or 300)

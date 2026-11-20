@@ -955,6 +955,266 @@ def test_agent_task_dialog_ui(tmp_path, qapp):
     assert hasattr(multi_dlg, "doc_combo")
     assert multi_dlg.doc_combo.count() == 2
 
+    # Verify Auto-Verification Button in AgentTaskDialog
+    assert hasattr(dialog, "verify_btn")
+    assert "验收" in dialog.verify_btn.text()
+
+
+def test_validate_task_result_pass_and_reject(tmp_path: Path):
+    """Test validate_task_result for missing file, invalid syntax, missing items, schema errors, and pass."""
+    db = SQLiteManager(tmp_path / "test.db")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    doc_id = "DOC-PAP-2024-B00001"
+    db.upsert_document({
+        "doc_id": doc_id,
+        "title": "Test Atomic Structure Calculations",
+        "doc_type": "PAP",
+        "pub_year": 2024,
+        "parse_status": "LIGHT_PARSED",
+    })
+
+    pipeline = MagicMock()
+    pipeline._store_draft = MagicMock(return_value="KNW-L2-2024-00001")
+    pipeline.config = {}
+
+    from sync_mcp.agent_task_packager import AgentTaskPackager
+    packager = AgentTaskPackager(db, workspace, pipeline=pipeline)
+
+    task_dir = workspace / "agent_tasks" / doc_id
+    task_dir.mkdir(parents=True, exist_ok=True)
+    items_data = [
+        {"item_id": f"{doc_id}-0", "section_path": "Sec 1", "focal_sentence": "Energy of Fe XVII"},
+        {"item_id": f"{doc_id}-1", "section_path": "Sec 2", "focal_sentence": "Transition rates"},
+    ]
+    (task_dir / "items.json").write_text(json.dumps(items_data, ensure_ascii=False), encoding="utf-8")
+
+    result_file = task_dir / "result.json"
+
+    # Case A: File not found
+    if result_file.is_file():
+        result_file.unlink()
+    res = packager.validate_task_result(doc_id)
+    assert res["passed"] is False
+    assert res["status"] == "REJECTED"
+    assert res["file_exists"] is False
+    assert any("未检测到结果文件" in r for r in res["rejection_reasons"])
+
+    # Case B: Empty file
+    result_file.write_text("", encoding="utf-8")
+    res = packager.validate_task_result(doc_id)
+    assert res["passed"] is False
+    assert res["status"] == "REJECTED"
+    assert any("空" in r for r in res["rejection_reasons"])
+
+    # Case C: JSON syntax error
+    result_file.write_text("{\ninvalid json syntax...", encoding="utf-8")
+    res = packager.validate_task_result(doc_id)
+    assert res["passed"] is False
+    assert any("JSON 语法解析错误" in r for r in res["rejection_reasons"])
+    assert "\\\\" in res["fix_prompt"]
+
+    # Case D: Missing root items
+    result_file.write_text(json.dumps({"wrong_root": []}), encoding="utf-8")
+    res = packager.validate_task_result(doc_id)
+    assert res["passed"] is False
+    assert any("缺少根键 'items'" in r for r in res["rejection_reasons"])
+
+    # Case E: Missing items (only item 0 returned, item 1 missing)
+    partial_payload = {
+        "items": [
+            {
+                "item_id": f"{doc_id}-0",
+                "result": {
+                    "cards": [
+                        {
+                            "card_type": "CONC",
+                            "title_zh": "铁离子能级",
+                            "summary_zh": "计算得到 Fe XVII 基态与激发态能级，与实验吻合良好。",
+                            "premises_and_conditions": "MCDHF 理论框架与 QED 校正",
+                        }
+                    ],
+                    "keywords": ["Fe XVII"],
+                },
+            }
+        ]
+    }
+    result_file.write_text(json.dumps(partial_payload, ensure_ascii=False), encoding="utf-8")
+    res = packager.validate_task_result(doc_id)
+    assert res["passed"] is False
+    assert f"{doc_id}-1" in res["missing_item_ids"]
+    assert any("条目缺失" in r for r in res["rejection_reasons"])
+    assert f"{doc_id}-1" in res["fix_prompt"]
+
+    # Case F: Schema error (card title_zh missing or empty)
+    invalid_schema_payload = {
+        "items": [
+            {
+                "item_id": f"{doc_id}-0",
+                "result": {
+                    "cards": [
+                        {
+                            "card_type": "CONC",
+                            "title_zh": "",  # Empty title!
+                            "summary_zh": "总结内容...",
+                            "premises_and_conditions": "前提...",
+                        }
+                    ]
+                },
+            },
+            {
+                "item_id": f"{doc_id}-1",
+                "result": {
+                    "skip": True,
+                    "skip_reason": "No data",
+                },
+            },
+        ]
+    }
+    result_file.write_text(json.dumps(invalid_schema_payload, ensure_ascii=False), encoding="utf-8")
+    res = packager.validate_task_result(doc_id)
+    assert res["passed"] is False
+    assert any("title_zh 为空" in r for r in res["rejection_reasons"])
+
+    # Case G: 100% Pass
+    valid_payload = {
+        "items": [
+            {
+                "item_id": f"{doc_id}-0",
+                "result": {
+                    "cards": [
+                        {
+                            "card_type": "CONC",
+                            "title_zh": "Fe XVII 激发态能级计算结果",
+                            "summary_zh": "利用 MCDHF 方法结合 Breit 与 QED 校正，精确计算了 Fe XVII 的 2s2 2p6 与 2s 2p6 3s 组态能级，相对误差小于 0.15%。",
+                            "premises_and_conditions": "采用 GRASP2K 计算，CSFs 扩展至 n=6 活性层。",
+                            "element": "Fe",
+                            "z_num": 26,
+                            "ion_stage": "Fe XVII",
+                        }
+                    ],
+                    "keywords": ["Fe XVII", "MCDHF", "QED"],
+                },
+            },
+            {
+                "item_id": f"{doc_id}-1",
+                "result": {
+                    "cards": [
+                        {
+                            "card_type": "CONC",
+                            "title_zh": "E1 与 M1 跃迁速率与振子强度",
+                            "summary_zh": "系统给出了基态至激发态的电偶极与磁偶极跃迁速率，Length 与 Velocity 规范差异在 1% 以内。",
+                            "premises_and_conditions": "Babushkin 与 Coulomb 规范收敛良好。",
+                        }
+                    ],
+                    "keywords": ["E1 Transition", "Transition Rate"],
+                },
+            },
+        ]
+    }
+    result_file.write_text(json.dumps(valid_payload, ensure_ascii=False), encoding="utf-8")
+    res = packager.validate_task_result(doc_id)
+    assert res["passed"] is True
+    assert res["status"] == "PASSED"
+    assert len(res["rejection_reasons"]) == 0
+    assert res["valid_items_count"] == 2
+    assert res["total_cards_count"] == 2
+    assert res["total_keywords_count"] == 5
+
+
+def test_agent_rejection_dialog_and_gui_flow(qapp, tmp_path: Path):
+    """Test AgentRejectionDialog and AgentTaskDialog auto-verify flow."""
+    db = SQLiteManager(tmp_path / "gui_test.db")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    doc_id = "DOC-PAP-2024-B00001"
+    db.upsert_document({
+        "doc_id": doc_id,
+        "title": "Test Atomic Calculations GUI Flow",
+        "doc_type": "PAP",
+        "pub_year": 2024,
+        "parse_status": "LIGHT_PARSED",
+    })
+
+    pipeline = MagicMock()
+    pipeline._store_draft = MagicMock(return_value="KNW-L2-2024-00001")
+    pipeline.config = {}
+
+    from ui.agent_task_dialog import AgentRejectionDialog, AgentTaskDialog
+    task_dir = workspace / "agent_tasks" / doc_id
+    task_dir.mkdir(parents=True, exist_ok=True)
+    (task_dir / "items.json").write_text(json.dumps([{"item_id": f"{doc_id}-0"}]), encoding="utf-8")
+
+    # 1. Test AgentRejectionDialog
+    fake_report = {
+        "passed": False,
+        "rejection_reasons": ["缺少条目 DOC-PAP-2024-B00001-0", "title_zh 为空"],
+        "fix_prompt": "你好，请修复上述问题...",
+    }
+    rej_dlg = AgentRejectionDialog(doc_id, task_dir, fake_report)
+    assert "打回" in rej_dlg.windowTitle()
+    assert "DOC-PAP-2024-B00001-0" in rej_dlg.reasons_edit.toPlainText()
+
+    with patch("PySide6.QtWidgets.QMessageBox.information") as mock_info:
+        rej_dlg._copy_fix_prompt()
+        assert mock_info.called
+
+    # 2. Test AgentTaskDialog UI and verify button
+    dlg = AgentTaskDialog(
+        db=db,
+        workspace=workspace,
+        pipeline=pipeline,
+        doc_id=doc_id,
+    )
+    assert hasattr(dlg, "verify_btn")
+
+    # When result.json is missing, _verify_and_ingest_result_json warns user
+    result_file = task_dir / "result.json"
+    if result_file.is_file():
+        result_file.unlink()
+
+    with patch("PySide6.QtWidgets.QMessageBox.warning") as mock_warn:
+        dlg._verify_and_ingest_result_json()
+        assert mock_warn.called
+        assert "未检测到结果文件" in mock_warn.call_args[0][1]
+
+    # When result.json is invalid, opens AgentRejectionDialog
+    result_file.write_text("{invalid json", encoding="utf-8")
+    with patch("ui.agent_task_dialog.AgentRejectionDialog.exec", return_value=QDialog.Rejected) as mock_rej_exec:
+        dlg._verify_and_ingest_result_json()
+        assert mock_rej_exec.called
+
+    # When result.json is valid, ingests and updates status
+    valid_payload = {
+        "items": [
+            {
+                "item_id": f"{doc_id}-0",
+                "result": {
+                    "cards": [
+                        {
+                            "card_type": "CONC",
+                            "title_zh": "有效卡片标题",
+                            "summary_zh": "计算得到有效物理结论，符合入库标准。",
+                            "premises_and_conditions": "有效理论框架",
+                        }
+                    ],
+                    "keywords": ["Valid Term"],
+                },
+            }
+        ]
+    }
+    result_file.write_text(json.dumps(valid_payload, ensure_ascii=False), encoding="utf-8")
+    with patch("PySide6.QtWidgets.QMessageBox.information") as mock_info:
+        dlg._verify_and_ingest_result_json()
+        assert mock_info.called
+        assert "验收通过" in mock_info.call_args[0][1]
+
+    updated_doc = db.get_document(doc_id)
+    assert updated_doc["parse_status"] == "LLM_EXTRACTED"
+
+
 
 
 

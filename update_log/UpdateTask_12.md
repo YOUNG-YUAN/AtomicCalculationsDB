@@ -301,7 +301,22 @@ workspace/agent_tasks/<DOC-ID>/
 - 当用户在文献库中勾选/选中多篇文献进入 Agent 任务台时，顶栏自动渲染“切换目标文献 (`QComboBox`)”与“📦 批量导出全部任务包”功能按键；
 - 允许用户在同一窗口内平滑切换不同文献，随时随地一键为选中的全部文献生成自解释任务目录，方便统一提供给本地 Agent 批量处理。
 
-### 9.5 修复缺陷
+### 9.5 结果自动化严格核验与一键打回/入库引擎 (`validate_task_result` & `AgentRejectionDialog`)
+- **自动检测与一键核验按键**：在 Agent 工作台顶栏（Row 3）与 Tab 1 底部操作栏均配备高亮按键 **`⚡ 检测并一键验收 result.json`**：
+  1. 自动探查任务目录下是否存在 `result.json`，若文件未生成则给出清晰温馨提示与路径指引；
+  2. 自动剥离 Markdown 围栏（````json ... ````），校验 JSON 语法，若存在引号或 LaTeX 反斜杠转义问题直接定位；
+  3. **条目完整性对比**：依据 `items.json` 比对返回的条目 ID 集合，精准捕获条目遗漏与缺失（例如预期 10 条仅返回 8 条，精准指出缺失条目编号）；
+  4. **严格 Schema 校验**：基于 `ExtractionResult` 校验每张知识卡片的标题、核心总结、前提条件与受控类别。
+- **自动化打回重做机制 (`AgentRejectionDialog`)**：
+  - 若存在任何语法、条目缺失或字段错误，**坚决不写入数据库**，立即唤起专属打回对话框；
+  - 红色警示框清晰罗列所有被拒原因与问题清单；
+  - **`📋 复制打回重做提示词 (发送给 Agent)`**：一键生成结构化的 Agent 修复 Prompt，直截了当告知 Agent 具体缺失哪些条目、格式错在何处、如何重新覆盖保存，用户直接粘贴发送给 Codex 即可极速修复；
+  - 提供 `⚠️ 忽略缺失强制部分入库` 备选容错分支。
+- **验收通过一键入库**：
+  - 校验通过后，自动调用数据管道完成物理卡片入库、关键词挂载、文献状态跃迁至 `LLM_EXTRACTED`，并无缝刷新所有关联界面。
+- **CLI 命令行联动**：支持 `python -m app_core agent verify <DOC-ID> [result_file]`，支持终端与自动化脚本秒级校验。
+
+### 9.6 修复缺陷
 - 修复在 `DocumentDetailDialog` 中关闭 Agent 任务工作台后调用不存在的 `_refresh_pipeline_stepper` 导致的 `AttributeError`（统一修正为调用现有的 `self._refresh_stepper()` 与 `self._refresh_related_cards()`）。
 - 详情页“⑤ AI 深度归纳”策略下拉框同步补齐 `💻 本地 Agent / CLI 模式` 选项。
 
@@ -309,13 +324,15 @@ workspace/agent_tasks/<DOC-ID>/
 
 ## 10. 自动化测试与全量验收
 
-- **测试用例总数**：由原 249 项扩展为 **254 项**；
-- **全量回归状态**：`pytest tests/` 254 项测试 100% 全部通过（0 失败，0 错误）；
+- **测试用例总数**：由原 249 项扩展为 **256 项**；
+- **全量回归状态**：`pytest tests/` 256 项测试 100% 全部通过（0 失败，0 错误）；
 - **新增 Agent 专项测试 (`tests/test_v310.py`)**：
   1. `test_agent_task_packager_export_and_submit`：端到端验证任务目录导出完整性、状态检查、结果提交（L2 卡片入库、关键词解析、文献状态跃迁）；
   2. `test_agent_workbench_and_cli_dispatch`：验证命令行解析器对 `agent export/submit/status/execute` 子命令的分发、`--base` 与 `--workspace` 参数穿透以及 Headless 独立服务安全退出；
   3. `test_rate_limit_detection_and_execute_resilience`：测试 429 / 限额 / 超时错误精准识别、执行器遇到限额自动挂起暂停、定时轮询探测解除后断点恢复与结果完整入库；
   4. `test_table_summary_prompt_and_submission`：测试数据表格总结 Prompt 生成、表格回复导入解析、生成 `DATA` 知识卡并存入数据库；
-  5. `test_agent_task_dialog_ui`：测试 `AgentTaskDialog` 图形工作台三标签页初始化、路径与命令行展示，以及 `DocumentDetailDialog` 中 `fast_mode_combo` 的 3 个执行策略选项。
+  5. `test_agent_task_dialog_ui`：测试 `AgentTaskDialog` 图形工作台三标签页初始化、路径与命令行展示，以及 `DocumentDetailDialog` 中 `fast_mode_combo` 的 3 个执行策略选项；
+  6. `test_validate_task_result_pass_and_reject`：测试 `validate_task_result` 针对未检测到文件、空文件、JSON 语法错误、条目缺失、Schema 格式错误以及 100% 通过等各种边界情况的精准拦截与通过机制；
+  7. `test_agent_rejection_dialog_and_gui_flow`：测试打回对话框 `AgentRejectionDialog` 渲染、打回提示词复制、自动验收按键触发与文献状态跃迁。
 - **实例文献验证**：以典型超长数据表文献 `DOC-PAP-0000-E284F0` 实测，成功导出自解释任务包目录、175 个条目、21 个浓缩数据表格，并成功生成 15,045 字符的表格总结专用 Prompt。
 

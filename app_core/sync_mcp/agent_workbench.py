@@ -741,6 +741,23 @@ class AgentWorkbenchService:
             log.exception("get_agent_task_status failed for %s", doc_id)
             raise
 
+    def verify_agent_task_result(
+        self,
+        doc_id: str,
+        result_path_or_json: str | dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Verify result.json against items.json and schema without writing to DB."""
+        from sync_mcp.agent_task_packager import AgentTaskPackager
+
+        try:
+            packager = AgentTaskPackager(self.db, self.workspace, pipeline=self.pipeline)
+            return packager.validate_task_result(doc_id, result_path_or_json)
+        except ValueError as exc:
+            raise WorkbenchInputError(str(exc)) from exc
+        except Exception as exc:
+            log.exception("verify_agent_task_result failed for %s", doc_id)
+            raise
+
     def execute_agent_task(
         self,
         doc_id: str,

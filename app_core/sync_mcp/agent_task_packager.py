@@ -280,6 +280,330 @@ class AgentTaskPackager:
             "image_count": len(copied_images),
         }
 
+    def validate_task_result(
+        self,
+        doc_id: str,
+        result_path_or_json: str | Path | Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Validate an agent's result.json against items.json and ExtractionResult schema without modifying DB.
+
+        Returns a comprehensive diagnostic report:
+            - passed: bool (True if all items are present and valid, False if rejected)
+            - status: "PASSED" | "REJECTED"
+            - doc_id: str
+            - file_exists: bool
+            - file_path: str
+            - total_expected_items: int
+            - total_returned_items: int
+            - valid_items_count: int
+            - skipped_items_count: int
+            - total_cards_count: int
+            - total_keywords_count: int
+            - missing_item_ids: list[str]
+            - duplicate_item_ids: list[str]
+            - rejection_reasons: list[str]
+            - fix_prompt: str
+        """
+        doc_key = str(doc_id or "").strip()
+        doc = self.db.get_document(doc_key)
+        if not doc:
+            return {
+                "passed": False,
+                "status": "REJECTED",
+                "doc_id": doc_key,
+                "file_exists": False,
+                "file_path": "",
+                "total_expected_items": 0,
+                "total_returned_items": 0,
+                "valid_items_count": 0,
+                "skipped_items_count": 0,
+                "total_cards_count": 0,
+                "total_keywords_count": 0,
+                "missing_item_ids": [],
+                "duplicate_item_ids": [],
+                "rejection_reasons": [f"未在数据库中找到文献编号：{doc_key}"],
+                "fix_prompt": f"未找到文献 {doc_key}，请检查文献编号是否正确。",
+            }
+
+        task_dir = self.workspace / "agent_tasks" / doc_key
+        task_items_file = task_dir / "items.json"
+        expected_items: dict[str, Any] = {}
+        if task_items_file.is_file():
+            try:
+                task_items_raw = json.loads(task_items_file.read_text(encoding="utf-8"))
+                for t_item in task_items_raw:
+                    iid = str(t_item.get("item_id") or "").strip()
+                    if iid:
+                        expected_items[iid] = t_item
+            except Exception as exc:
+                log.warning("Failed to parse items.json for %s: %s", doc_key, exc)
+
+        # Target file
+        if result_path_or_json is None:
+            default_path = task_dir / "result.json"
+            if not default_path.is_file():
+                return {
+                    "passed": False,
+                    "status": "REJECTED",
+                    "doc_id": doc_key,
+                    "file_exists": False,
+                    "file_path": str(default_path.resolve()),
+                    "total_expected_items": len(expected_items),
+                    "total_returned_items": 0,
+                    "valid_items_count": 0,
+                    "skipped_items_count": 0,
+                    "total_cards_count": 0,
+                    "total_keywords_count": 0,
+                    "missing_item_ids": list(expected_items.keys()),
+                    "duplicate_item_ids": [],
+                    "rejection_reasons": [
+                        f"在任务工作目录下未检测到结果文件：{default_path.name}。\n"
+                        f"完整路径：{default_path.resolve()}\n"
+                        "请确认 Agent 是否已完成提炼并生成了该文件。"
+                    ],
+                    "fix_prompt": (
+                        f"你好，位于工作目录 `{task_dir.resolve()}` 的提炼任务尚未检测到结果文件 `result.json`。\n"
+                        "请读取 `items.json` 与 `schema.json`，完成物理提炼后将结果保存为 `result.json`。"
+                    ),
+                }
+            result_path_or_json = default_path
+
+        rejection_reasons: list[str] = []
+        file_path_str = ""
+
+        # Load raw JSON
+        if isinstance(result_path_or_json, Mapping):
+            payload = dict(result_path_or_json)
+        else:
+            path_or_text = str(result_path_or_json).strip()
+            file_candidate = Path(path_or_text)
+            if file_candidate.is_file():
+                file_path_str = str(file_candidate.resolve())
+                raw_text = file_candidate.read_text(encoding="utf-8").strip()
+            else:
+                raw_text = path_or_text
+
+            if not raw_text:
+                return {
+                    "passed": False,
+                    "status": "REJECTED",
+                    "doc_id": doc_key,
+                    "file_exists": bool(file_path_str),
+                    "file_path": file_path_str,
+                    "total_expected_items": len(expected_items),
+                    "total_returned_items": 0,
+                    "valid_items_count": 0,
+                    "skipped_items_count": 0,
+                    "total_cards_count": 0,
+                    "total_keywords_count": 0,
+                    "missing_item_ids": list(expected_items.keys()),
+                    "duplicate_item_ids": [],
+                    "rejection_reasons": ["结果文件内容为空 (0 字节)。"],
+                    "fix_prompt": (
+                        f"位于 `{task_dir.resolve()}` 的 `result.json` 文件为空。\n"
+                        "请重新读取 `schema.json` 与 `items.json` 进行物理提炼并重新生成结果。"
+                    ),
+                }
+
+            cleaned_text = raw_text
+            if cleaned_text.startswith("```"):
+                lines = cleaned_text.splitlines()
+                if lines[0].startswith("```"):
+                    lines = lines[1:]
+                if lines and lines[-1].strip().startswith("```"):
+                    lines = lines[:-1]
+                cleaned_text = "\n".join(lines).strip()
+
+            try:
+                payload = json.loads(cleaned_text)
+            except Exception as exc:
+                return {
+                    "passed": False,
+                    "status": "REJECTED",
+                    "doc_id": doc_key,
+                    "file_exists": bool(file_path_str),
+                    "file_path": file_path_str,
+                    "total_expected_items": len(expected_items),
+                    "total_returned_items": 0,
+                    "valid_items_count": 0,
+                    "skipped_items_count": 0,
+                    "total_cards_count": 0,
+                    "total_keywords_count": 0,
+                    "missing_item_ids": list(expected_items.keys()),
+                    "duplicate_item_ids": [],
+                    "rejection_reasons": [f"JSON 语法解析错误（请检查引号闭合或 LaTeX 反斜杠转义）：{exc}"],
+                    "fix_prompt": (
+                        f"你好，你生成的 `result.json` 存在 JSON 语法解析错误，无法被解析：\n\n"
+                        f"【错误信息】：{exc}\n\n"
+                        f"【修复要求】：\n"
+                        f"1. 请确保输出为纯净合法的 JSON 格式，不要包含 Markdown 解释文字；\n"
+                        f"2. 特别注意：LaTeX 公式中的反斜杠必须转义为双反斜杠（如 \\\\frac, \\\\alpha 而非单个 \\），避免破坏 JSON 转义；\n"
+                        f"3. 修复后请直接覆盖保存至：`{(task_dir / 'result.json').resolve()}`。"
+                    ),
+                }
+
+        # Normalize entries
+        if isinstance(payload, list):
+            entries = payload
+        elif isinstance(payload, dict) and "items" in payload:
+            entries = payload["items"]
+        elif isinstance(payload, dict) and "cards" in payload:
+            entries = [{"item_id": f"{doc_key}-0", "result": payload}]
+        else:
+            return {
+                "passed": False,
+                "status": "REJECTED",
+                "doc_id": doc_key,
+                "file_exists": bool(file_path_str),
+                "file_path": file_path_str,
+                "total_expected_items": len(expected_items),
+                "total_returned_items": 0,
+                "valid_items_count": 0,
+                "skipped_items_count": 0,
+                "total_cards_count": 0,
+                "total_keywords_count": 0,
+                "missing_item_ids": list(expected_items.keys()),
+                "duplicate_item_ids": [],
+                "rejection_reasons": ["回复 JSON 缺少根键 'items' 数组，格式不符合任务规范要求。"],
+                "fix_prompt": (
+                    f"你好，你的 `result.json` 根结构不符合规范。根对象必须包含 `items` 列表数组：\n"
+                    f'{{"items": [{{"item_id": "{doc_key}-0", "result": {{...}}}}]}}\n'
+                    f"请参考 `schema.json` 规范重新生成。"
+                ),
+            }
+
+        # Inspect items and compare with expected items
+        returned_ids: list[str] = []
+        duplicate_ids: set[str] = set()
+        seen: set[str] = set()
+
+        for entry in entries:
+            if not isinstance(entry, Mapping):
+                rejection_reasons.append(f"条目列表包含非对象元素: {type(entry).__name__}")
+                continue
+            iid = str(entry.get("item_id") or "").strip()
+            if not iid:
+                rejection_reasons.append("存在未提供 'item_id' 的条目")
+                continue
+            if iid in seen:
+                duplicate_ids.add(iid)
+            seen.add(iid)
+            returned_ids.append(iid)
+
+        if duplicate_ids:
+            rejection_reasons.append(f"条目编号重复：以下条目在结果中重复定义：{', '.join(sorted(duplicate_ids))}")
+
+        # Check missing items
+        missing_ids: list[str] = []
+        if expected_items:
+            expected_set = set(expected_items.keys())
+            returned_set = set(returned_ids)
+            missing_ids = sorted(expected_set - returned_set)
+            if missing_ids:
+                missing_str = ", ".join(missing_ids[:8])
+                if len(missing_ids) > 8:
+                    missing_str += f" 等共 {len(missing_ids)} 个条目"
+                rejection_reasons.append(
+                    f"条目缺失（未全部完成）：预期应包含 {len(expected_set)} 个提炼条目，实际仅返回 {len(returned_set)} 个。"
+                    f"缺失条目：[{missing_str}]"
+                )
+
+        valid_items_count = 0
+        skipped_items_count = 0
+        total_cards_count = 0
+        total_keywords_count = 0
+
+        for entry in entries:
+            if not isinstance(entry, Mapping):
+                continue
+            item_id = str(entry.get("item_id") or "").strip()
+            result_payload = entry.get("result", entry)
+            if not isinstance(result_payload, Mapping):
+                rejection_reasons.append(f"条目 [{item_id}] 缺少合法的 'result' 对象")
+                continue
+
+            result_dict = dict(result_payload)
+            if isinstance(result_dict.get("keywords"), list):
+                norm_kw = []
+                for k in result_dict["keywords"]:
+                    if isinstance(k, str):
+                        norm_kw.append({"term_en": k})
+                    elif isinstance(k, Mapping):
+                        k_copy = dict(k)
+                        if "term_en" not in k_copy and "keyword" in k_copy:
+                            k_copy["term_en"] = k_copy.pop("keyword")
+                        norm_kw.append(k_copy)
+                    else:
+                        norm_kw.append(k)
+                result_dict["keywords"] = norm_kw
+
+            try:
+                extraction = ExtractionResult.model_validate(result_dict)
+            except Exception as exc:
+                rejection_reasons.append(f"条目 [{item_id}] 不符合 ExtractionResult Schema 规范: {exc}")
+                continue
+
+            valid_items_count += 1
+            if extraction.skip:
+                skipped_items_count += 1
+                continue
+
+            if not extraction.cards:
+                rejection_reasons.append(f"条目 [{item_id}] 未标记跳过 (skip=false)，但提取出的卡片列表为空 (cards 为空)")
+                continue
+
+            for c_idx, card in enumerate(extraction.cards, 1):
+                t_zh = str(card.title_zh or "").strip()
+                s_zh = str(card.summary_zh or "").strip()
+                p_cond = str(card.premises_and_conditions or "").strip()
+                if len(t_zh) < 2:
+                    rejection_reasons.append(f"条目 [{item_id}] 第 {c_idx} 张知识卡片缺少中文标题 (title_zh 为空)")
+                if len(s_zh) < 5:
+                    rejection_reasons.append(f"条目 [{item_id}] 第 {c_idx} 张知识卡片核心总结过短 (summary_zh 至少需要 5 字符)")
+                if not p_cond:
+                    rejection_reasons.append(f"条目 [{item_id}] 第 {c_idx} 张知识卡片缺少前提条件 (premises_and_conditions 为空)")
+                total_cards_count += 1
+
+            total_keywords_count += len(extraction.keywords)
+
+        passed = (len(rejection_reasons) == 0)
+        status = "PASSED" if passed else "REJECTED"
+
+        fix_prompt = ""
+        if not passed:
+            reasons_bullet = "\n".join(f"{i}. {r}" for i, r in enumerate(rejection_reasons, 1))
+            fix_prompt = (
+                f"你好，在核验你生成的 `result.json` 时发现了以下问题，任务已被打回重做：\n\n"
+                f"【工作目录】：`{task_dir.resolve()}`\n"
+                f"【目标文献】：`{doc_key}`\n\n"
+                f"【打回原因与问题清单】：\n"
+                f"{reasons_bullet}\n\n"
+                f"【修复要求】：\n"
+                f"1. 请重新访问工作目录下的 `schema.json`、`items.json` 与 `task_instructions.md`；\n"
+                f"2. 严格根据上述问题清单进行修复，补充缺失条目并修正格式错误；\n"
+                f"3. 修复后请直接将合法的 JSON 重新保存并覆盖原文件：\n"
+                f"   `{(task_dir / 'result.json').resolve()}`\n"
+                f"4. 若遇到 429 限额请暂停轮询等待解除，完成后回复我即可重新验收。"
+            )
+
+        return {
+            "passed": passed,
+            "status": status,
+            "doc_id": doc_key,
+            "file_exists": True,
+            "file_path": file_path_str or str((task_dir / "result.json").resolve()),
+            "total_expected_items": len(expected_items),
+            "total_returned_items": len(returned_ids),
+            "valid_items_count": valid_items_count,
+            "skipped_items_count": skipped_items_count,
+            "total_cards_count": total_cards_count,
+            "total_keywords_count": total_keywords_count,
+            "missing_item_ids": missing_ids,
+            "duplicate_item_ids": sorted(duplicate_ids),
+            "rejection_reasons": rejection_reasons,
+            "fix_prompt": fix_prompt,
+        }
+
     def submit_task_result(
         self,
         doc_id: str,
@@ -308,7 +632,15 @@ class AgentTaskPackager:
                 raw_text = file_candidate.read_text(encoding="utf-8")
             else:
                 raw_text = path_or_text
-            payload = json.loads(raw_text)
+            cleaned_text = raw_text.strip()
+            if cleaned_text.startswith("```"):
+                lines = cleaned_text.splitlines()
+                if lines[0].startswith("```"):
+                    lines = lines[1:]
+                if lines and lines[-1].strip().startswith("```"):
+                    lines = lines[:-1]
+                cleaned_text = "\n".join(lines).strip()
+            payload = json.loads(cleaned_text)
 
         # Normalize entries
         if isinstance(payload, list):

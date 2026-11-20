@@ -140,6 +140,148 @@ class AgentPasteReplyDialog(QDialog):
         return self.model_combo.currentText().strip()
 
 
+class AgentRejectionDialog(QDialog):
+    """Modal dialog displaying rejection reasons when result.json validation fails."""
+
+    def __init__(
+        self,
+        doc_id: str,
+        task_dir: Path,
+        verification_report: dict[str, Any],
+        parent: QWidget | None = None,
+    ):
+        super().__init__(parent)
+        self.doc_id = doc_id
+        self.task_dir = Path(task_dir)
+        self.report = verification_report
+        self.force_ingest_requested = False
+
+        self.setWindowTitle(f"❌ 任务核验未通过（已打回重做）— {self.doc_id}")
+        self.resize(720, 520)
+        self.setMinimumSize(620, 420)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(12)
+
+        # 1. Warning banner
+        banner = QFrame()
+        banner.setStyleSheet(
+            "QFrame {"
+            " background: #fef2f2;"
+            " border: 1.5px solid #fecaca;"
+            " border-radius: 8px;"
+            " padding: 12px;"
+            "}"
+        )
+        b_layout = QVBoxLayout(banner)
+        b_layout.setContentsMargins(4, 4, 4, 4)
+        b_layout.setSpacing(4)
+
+        b_title = QLabel("⚠️ 结果核验未通过，已打回！数据未写入数据库。")
+        b_title.setStyleSheet("font-size: 14px; font-weight: bold; color: #dc2626;")
+        b_layout.addWidget(b_title)
+
+        reasons = self.report.get("rejection_reasons", [])
+        result_file = self.task_dir / "result.json"
+        b_desc = QLabel(f"在对 `{result_file.name}` 进行自动化严格核验时，共发现 {len(reasons)} 处问题：")
+        b_desc.setStyleSheet("font-size: 12px; color: #991b1b;")
+        b_layout.addWidget(b_desc)
+        layout.addWidget(banner)
+
+        # 2. Detailed reasons box
+        lbl_reasons = QLabel("核验问题清单与详情：")
+        lbl_reasons.setStyleSheet("font-weight: bold; color: #334155; font-size: 12px;")
+        layout.addWidget(lbl_reasons)
+
+        self.reasons_edit = QTextEdit()
+        self.reasons_edit.setReadOnly(True)
+        self.reasons_edit.setStyleSheet(
+            "QTextEdit {"
+            " border: 1px solid #cbd5e1;"
+            " border-radius: 6px;"
+            " background: #f8fafc;"
+            " font-family: monospace;"
+            " font-size: 12px;"
+            " padding: 8px;"
+            "}"
+        )
+        lines = []
+        for idx, r in enumerate(reasons, 1):
+            lines.append(f"{idx}. {r}")
+        self.reasons_edit.setPlainText("\n\n".join(lines) if lines else "（未检测到具体错误信息）")
+        layout.addWidget(self.reasons_edit, 1)
+
+        # 3. Action bar
+        btn_bar = QHBoxLayout()
+        btn_bar.setSpacing(10)
+
+        self.copy_fix_prompt_btn = QPushButton("📋 复制打回重做提示词 (发送给 Agent)")
+        self.copy_fix_prompt_btn.setStyleSheet(
+            "QPushButton {"
+            " background-color: #dc2626; color: #ffffff;"
+            " border: none; border-radius: 6px;"
+            " font-weight: bold; font-size: 12px; padding: 6px 16px;"
+            "}"
+            "QPushButton:hover { background-color: #b91c1c; }"
+        )
+        self.copy_fix_prompt_btn.clicked.connect(self._copy_fix_prompt)
+        btn_bar.addWidget(self.copy_fix_prompt_btn)
+
+        open_folder_btn = QPushButton("📁 打开任务目录")
+        open_folder_btn.clicked.connect(self._open_folder)
+        btn_bar.addWidget(open_folder_btn)
+
+        btn_bar.addStretch(1)
+
+        force_btn = QPushButton("⚠️ 忽略缺失强制部分入库")
+        force_btn.setObjectName("Ghost")
+        force_btn.setStyleSheet("color: #b45309; border: 1px solid #fde68a; font-size: 11px;")
+        force_btn.setToolTip("仅将校验通过的条目入库，文献将标记为 PARTIAL_EXTRACTED")
+        force_btn.clicked.connect(self._force_partial_ingest)
+        btn_bar.addWidget(force_btn)
+
+        close_btn = QPushButton("关闭")
+        close_btn.setFixedSize(80, 32)
+        close_btn.clicked.connect(self.reject)
+        btn_bar.addWidget(close_btn)
+
+        layout.addLayout(btn_bar)
+
+    def _copy_fix_prompt(self) -> None:
+        prompt = self.report.get("fix_prompt", "")
+        if not prompt:
+            reasons = self.report.get("rejection_reasons", [])
+            prompt = "\n".join(reasons)
+        clipboard = QGuiApplication.clipboard()
+        if clipboard:
+            clipboard.setText(prompt)
+        QMessageBox.information(self, "复制成功", "已复制打回重做提示词！直接粘贴发送给 Agent 即可。")
+
+    def _open_folder(self) -> None:
+        try:
+            if sys.platform == "win32":
+                os.startfile(str(self.task_dir.resolve()))
+            else:
+                QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.task_dir.resolve())))
+        except Exception as exc:
+            QMessageBox.warning(self, "打开文件夹失败", str(exc))
+
+    def _force_partial_ingest(self) -> None:
+        reply = QMessageBox.question(
+            self,
+            "确认强制部分入库",
+            "当前 result.json 存在条目缺失或校验错误。\n"
+            "强制入库将仅提取校验通过的有效卡片，且文献状态将标记为「部分提炼 (PARTIAL_EXTRACTED)」。\n\n"
+            "确定要强制部分入库吗？",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply == QMessageBox.Yes:
+            self.force_ingest_requested = True
+            self.accept()
+
+
 class AgentTaskDialog(QDialog):
     """Workbench dialog for managing Agent task packages, table summaries, and reply imports."""
 
@@ -285,13 +427,27 @@ class AgentTaskDialog(QDialog):
         row2.addWidget(copy_cli_btn)
         ctrl_vbox.addLayout(row2)
 
-        # Row 3: Agent Prompt Instruction
+        # Row 3: Agent Prompt Instruction & Auto-Verification
         row3 = QHBoxLayout()
-        row3.addWidget(QLabel("任务说明与提示词:"))
+        row3.addWidget(QLabel("任务操作与核验:"))
         copy_prompt_btn = QPushButton("📋 复制完整 Agent 提示词")
         copy_prompt_btn.setStyleSheet("font-weight: bold; color: #1d4ed8;")
         copy_prompt_btn.clicked.connect(self._copy_agent_instructions)
         row3.addWidget(copy_prompt_btn)
+
+        self.verify_btn = QPushButton("⚡ 检测并一键验收 result.json")
+        self.verify_btn.setObjectName("Pill")
+        self.verify_btn.setToolTip("自动检测当前目录下是否存在 result.json，进行格式与完整性严格校验。通过则直接入库，存在问题则打回并生成重做提示词。")
+        self.verify_btn.setStyleSheet(
+            "QPushButton {"
+            " background: #0284c7; color: #ffffff; border: 1px solid #0369a1;"
+            " border-radius: 4px; padding: 5px 14px; font-weight: bold;"
+            "}"
+            "QPushButton:hover { background: #0369a1; }"
+        )
+        self.verify_btn.clicked.connect(self._verify_and_ingest_result_json)
+        row3.addWidget(self.verify_btn)
+
         row3.addStretch(1)
         ctrl_vbox.addLayout(row3)
 
@@ -371,6 +527,20 @@ class AgentTaskDialog(QDialog):
         bar.addWidget(copy_sel_btn)
 
         bar.addStretch(1)
+
+        # Auto verify button
+        auto_verify_tab_btn = QPushButton("⚡ 自动验收 result.json")
+        auto_verify_tab_btn.setObjectName("Pill")
+        auto_verify_tab_btn.setToolTip("自动识别目录下是否有 result.json，尝试解析校验，成功则通过入库，存在问题则打回并生成重做提示词。")
+        auto_verify_tab_btn.setStyleSheet(
+            "QPushButton {"
+            " background: #0284c7; color: #ffffff; border: 1px solid #0369a1;"
+            " border-radius: 4px; padding: 5px 12px; font-weight: bold;"
+            "}"
+            "QPushButton:hover { background: #0369a1; }"
+        )
+        auto_verify_tab_btn.clicked.connect(self._verify_and_ingest_result_json)
+        bar.addWidget(auto_verify_tab_btn)
 
         # Two buttons matching Image 2
         import_items_file_btn = QPushButton("📥 导入回复文件")
@@ -804,6 +974,82 @@ class AgentTaskDialog(QDialog):
         item = self.files_list.item(row)
         p = Path(item.data(Qt.UserRole))
         self._copy_to_clipboard(str(p.resolve()), f"已复制 {p.name} 路径")
+
+    # ---------------------------------------------------------------- Auto Verification & Ingestion
+    def _verify_and_ingest_result_json(self) -> None:
+        """Automatically detect result.json in task_dir, validate schema and completeness.
+
+        If valid, ingests into database and transitions status to LLM_EXTRACTED.
+        If errors or missing items exist, rejects and opens AgentRejectionDialog with fix prompt.
+        """
+        result_file = self.task_dir / "result.json"
+        if not result_file.is_file():
+            QMessageBox.warning(
+                self,
+                "未检测到结果文件",
+                f"在当前任务工作目录下尚未找到 `result.json`：\n\n"
+                f"{result_file.resolve()}\n\n"
+                f"请确认 Agent（如 Codex / Claude Code / Antigravity）是否已处理完毕并在该目录下生成了 `result.json` 文件。",
+            )
+            return
+
+        report = self.packager.validate_task_result(self.doc_id, result_file)
+        if not report.get("passed"):
+            dlg = AgentRejectionDialog(self.doc_id, self.task_dir, report, parent=self)
+            if dlg.exec() == QDialog.Accepted and getattr(dlg, "force_ingest_requested", False):
+                try:
+                    res = self.packager.submit_task_result(
+                        self.doc_id,
+                        result_file,
+                        agent_name="agent_workbench",
+                        agent_model=self.current_agent_model,
+                        complete=False,
+                    )
+                    QMessageBox.information(
+                        self,
+                        "部分入库成功",
+                        f"已强制入库有效卡片：{res['stored_cards']} 张卡片、{res['stored_keywords']} 个关键词。\n"
+                        f"文献状态已更新为：【部分提炼 (PARTIAL_EXTRACTED)】",
+                    )
+                    self._refresh_all()
+                    if hasattr(self.parent(), "_refresh_related_cards"):
+                        self.parent()._refresh_related_cards()
+                    if hasattr(self.parent(), "_refresh_stepper"):
+                        self.parent()._refresh_stepper()
+                except Exception as exc:
+                    QMessageBox.critical(self, "强制入库失败", f"强制入库异常: {exc}")
+            return
+
+        # Verification passed! Ingest into database
+        try:
+            res = self.packager.submit_task_result(
+                self.doc_id,
+                result_file,
+                agent_name="agent_workbench",
+                agent_model=self.current_agent_model,
+                complete=True,
+            )
+            cards = res.get("stored_cards", 0)
+            kws = res.get("stored_keywords", 0)
+            items = res.get("processed_items", 0)
+            total = res.get("total_items", items)
+
+            QMessageBox.information(
+                self,
+                "验收通过并入库成功",
+                f"🎉 恭喜！`result.json` 自动化严格核验 100% 通过！\n\n"
+                f"• 验证条目: {items} / {total} 条（完整无缺失）\n"
+                f"• 成功入库知识卡片: {cards} 张\n"
+                f"• 成功入库关键词: {kws} 个\n"
+                f"• 文献状态已更新为: 【AI 已提炼 (LLM_EXTRACTED)】",
+            )
+            self._refresh_all()
+            if hasattr(self.parent(), "_refresh_related_cards"):
+                self.parent()._refresh_related_cards()
+            if hasattr(self.parent(), "_refresh_stepper"):
+                self.parent()._refresh_stepper()
+        except Exception as exc:
+            QMessageBox.critical(self, "入库失败", f"入库过程遇到异常：{exc}")
 
     # ---------------------------------------------------------------- Import Actions (Image 2)
     def _import_items_file(self) -> None:
