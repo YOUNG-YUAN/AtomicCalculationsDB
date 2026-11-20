@@ -1,4 +1,4 @@
-# UpdateTask_12.md — `AtomicCalculationDB` (V3.1.0) BibTeX文献信息导入更新、清单行内防误触锁定、专属元数据编辑对话框、处理模型智能记忆与超长数据表提问包重构 (Table-on-Demand)
+# UpdateTask_12.md — `AtomicCalculationsDB` (V3.1.0) BibTeX文献信息导入更新、清单行内防误触锁定、专属元数据编辑对话框、处理模型智能记忆、超长数据表提问包重构 (Table-on-Demand)、本地Agent/CLI任务包与全异步写入防假死
 
 > **版本**：`v3.1.0`  
 > **构建号**：`20261119`  
@@ -35,12 +35,20 @@
 > 6. **自主 AI Agent (Codex/Claude Code/Antigravity) 专属任务包与 CLI 自动化工作流**：
 >    - **解耦自解释目录**：生成专属 `workspace/agent_tasks/<DOC-ID>/`，包含 `task_instructions.md`（带物理规则与防坑指南）、`items.json`（按需关联独立表格与图片）、`schema.json`（严格结果结构）、`parsed.md`（全文公式文本）以及 `tables/Table_X.md`；
 >    - **Agent CLI 交互引擎**：支持 `python -m app_core agent export <DOC-ID>` 导出目录、`status <DOC-ID>` 查询任务状态、`submit <DOC-ID> [result.json]` 校验并自动批量入库 L2 知识卡片、关键词并推进状态至 `LLM_EXTRACTED`；
->    - **GUI 桥接与 MCP 工具联动**：GUI 运行时通过 HTTP 桥无冲突操作（避免 Qdrant/SQLite 锁），GUI 未启动时以 Headless 独立服务执行；同步在 `KnowledgeMCPServer` 中暴露对应 MCP 工具。
+>    - **429/限额超强弹性韧性**：针对 Codex 等 Agent 限额超时，提供断点保留、挂起暂停与定时轮询恢复机制，绝不中断丢失任务。
 > 7. **本地 Agent / CLI 专属图形工作台 (`AgentTaskDialog`)、执行策略专用选项与数据表格总结入库 (DATA Cards)**：
->    - **专属执行策略**：在文献详情工作台“⚙️ 执行策略: ③ AI 快速提取”下拉框中新增第三项专属执行策略：`💻 本地 Agent / CLI 任务包`；
->    - **本地 Agent 工作台 (`AgentTaskDialog`)**：点击第 ③ 步执行按键直接唤起全新的专属工作台，呈现任务包绝对目录（复制路径/打开文件夹/重新生成）、CLI 执行命令行、Agent 通用任务提示词与原始文件列表；
+>    - **专属执行策略**：在文献详情工作台“⚙️ 执行策略: ③ AI 快速提取”下拉框与文献库顶层 `TaskScopeDialog` 中新增第三项专属执行策略：`💻 本地 Agent / CLI 任务包`；
+>    - **本地 Agent 工作台 (`AgentTaskDialog`)**：支持任务包路径复制、文件夹直达、重新生成、CLI 命令行一键复制、批量文献平滑切换；
 >    - **条目与表格双重回复导入 (双按键)**：针对物理条目 (`items.json`) 与数据表格 (`tables/`) 分别提供 `📥 导入回复文件` 与 `📝 粘贴回复文本` 两个专属导入按键；
 >    - **数据表格总结直接入库为 DATA 卡片**：支持一键生成并复制表格总结专用 Prompt，AI 根据表头、列标签及大致数值输出的总结，自动解析并转换为规范的【数据类型知识卡 (DATA Cards)】直接入库。
+> 8. **自动化结果验收、打回重做提示词生成与按键状态联动保护**：
+>    - 提供 `⚡ 检测并一键验收 result.json`：自动严格核验条目完整性与 Schema；未通过时自动打回重做（`AgentRejectionDialog`）并一键复制 Agent 修复提示词；
+>    - 验收通过后按键自动变绿为 `✅ 已验收通过` 并锁定禁用，导入与粘贴按键同步置灰，杜绝重复写入或误触。
+> 9. **全异步防假死数据库写入进度条 (`AsyncProgressDialog` & `run_task_with_progress`)**：
+>    - 彻底根除网页 AI 与 CLI 模式下大批量知识卡片入库与向量索引更新时的界面停顿冻结感，多线程异步执行配合平滑渐变进度条与实时条目反馈。
+> 10. **软件全称规范校准**：
+>     - 统一将主界面 Logo 标题、窗口顶栏、托盘气泡与导出物标头规范修正为复数形式 `AtomicCalculationsDB`。
+
 
 ---
 
@@ -339,6 +347,16 @@ workspace/agent_tasks/<DOC-ID>/
     3. Agent 条目文件/文本导入写入 (`_submit_items`)；
     4. 数据表格总结文件/文本导入写入 (`_submit_tables`)；
   - 在保持界面丝滑流畅交互的同时，确保多线程下 SQLite / Qdrant 写入的线程安全与异常安全捕获。
+
+### 9.9 软件全称规范校准为复数形式 (`AtomicCalculationsDB`)
+- **品牌名称规范化统一**：
+  - 项目名称、GitHub 仓库名与技术构想一直采用复数形式 `AtomicCalculationsDB`（寓意原子物理多元计算与数据知识库），但此前在主界面顶部、系统托盘及部分对话框窗口标题中缺少了末尾字母 `s`；
+  - 本次更新完成全面校准修正：
+    1. 主界面左上角 Logo 旁品牌大标题：统一校准为 **`AtomicCalculationsDB`**；
+    2. 主窗口标题栏与系统托盘气泡提示：`AtomicCalculationsDB · 原子物理知识库`；
+    3. 各类独立子窗口标题（文献详情、知识卡详情、关键词网络）：后缀统一修正为 `· AtomicCalculationsDB`；
+    4. 待下载清单 HTML、AI 校对包与 MCP 服务标识统一同步修正；
+    5. `QSettings` 偏好存储层建立双向兼容容错，优先读取新名称，并无缝继承历史单数名称下的已有配置。
 
 ---
 
