@@ -378,11 +378,35 @@ class AgentTaskDialog(QDialog):
         info_vbox.addWidget(self.meta_label)
         h_layout.addLayout(info_vbox, 1)
 
+        right_vbox = QVBoxLayout()
+        right_vbox.setSpacing(6)
+        right_vbox.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+
         self.status_badge = QLabel()
         self.status_badge.setStyleSheet(
             "padding: 4px 10px; border-radius: 6px; font-weight: bold; font-size: 12px; background: #e0f2fe; color: #0369a1;"
         )
-        h_layout.addWidget(self.status_badge)
+        right_vbox.addWidget(self.status_badge, 0, Qt.AlignRight)
+
+        model_row = QHBoxLayout()
+        model_row.setSpacing(6)
+        lbl_m = QLabel("🤖 处理模型:")
+        lbl_m.setStyleSheet("font-size: 11px; font-weight: bold; color: #475569;")
+        model_row.addWidget(lbl_m)
+
+        self.model_combo = QComboBox()
+        self.model_combo.setEditable(True)
+        self.model_combo.setMinimumWidth(180)
+        items = list(PRESET_AGENT_MODELS)
+        if self.current_agent_model and self.current_agent_model not in items:
+            items.insert(0, self.current_agent_model)
+        self.model_combo.addItems(items)
+        self.model_combo.setCurrentText(self.current_agent_model)
+        self.model_combo.currentTextChanged.connect(self._on_model_changed)
+        model_row.addWidget(self.model_combo)
+
+        right_vbox.addLayout(model_row)
+        h_layout.addLayout(right_vbox)
         main_layout.addWidget(header_frame)
 
         # 2. Control Card: Agent Folder & CLI commands
@@ -416,7 +440,7 @@ class AgentTaskDialog(QDialog):
         # Row 2: CLI Command
         row2 = QHBoxLayout()
         row2.addWidget(QLabel("CLI 命令行:"))
-        cli_cmd = f"python -m app_core agent execute {self.doc_id}"
+        cli_cmd = f"python -m app_core agent execute {self.doc_id} --model \"{self.current_agent_model}\""
         self.cli_edit = QLineEdit(cli_cmd)
         self.cli_edit.setReadOnly(True)
         self.cli_edit.setStyleSheet("background: #f1f5f9; color: #0284c7; font-family: monospace;")
@@ -693,6 +717,13 @@ class AgentTaskDialog(QDialog):
         bar.addStretch(1)
         layout.addLayout(bar)
 
+    def _on_model_changed(self, text: str) -> None:
+        val = text.strip() or "GPT-6.2 Sol Ultra"
+        self.current_agent_model = val
+        save_default_agent_model(val, getattr(self.pipeline, "config", None))
+        if hasattr(self, "cli_edit"):
+            self.cli_edit.setText(f"python -m app_core agent execute {self.doc_id} --model \"{val}\"")
+
     def _on_doc_combo_changed(self, idx: int) -> None:
         if idx < 0 or not hasattr(self, "doc_combo"):
             return
@@ -706,7 +737,7 @@ class AgentTaskDialog(QDialog):
             except Exception as exc:
                 log.warning("Export task bundle warning: %s", exc)
             self.path_edit.setText(str(self.task_dir.resolve()))
-            self.cli_edit.setText(f"python -m app_core agent execute {self.doc_id}")
+            self.cli_edit.setText(f"python -m app_core agent execute {self.doc_id} --model \"{self.current_agent_model}\"")
             title_suffix = f" (共 {len(self.doc_ids)} 篇)" if len(self.doc_ids) > 1 else ""
             self.setWindowTitle(f"💻 本地 Agent / CLI 任务工作台 — {self.doc_id}{title_suffix}")
             self._refresh_all()

@@ -897,6 +897,11 @@ def test_agent_task_dialog_ui(tmp_path, qapp):
     assert "任务包原始文件" in dialog.tabs.tabText(2)
     assert dialog.path_edit.text() != ""
     assert "agent execute" in dialog.cli_edit.text()
+    assert hasattr(dialog, "model_combo")
+    assert dialog.model_combo.count() >= 1
+    dialog.model_combo.setCurrentText("Claude 3.7 Sonnet")
+    assert dialog.current_agent_model == "Claude 3.7 Sonnet"
+    assert "Claude 3.7 Sonnet" in dialog.cli_edit.text()
 
     # Verify DocumentDetailDialog has "agent" option in fast_mode_combo & deep_mode_combo
     detail_dlg = DocumentDetailDialog(

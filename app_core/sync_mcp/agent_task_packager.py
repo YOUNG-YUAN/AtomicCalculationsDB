@@ -652,6 +652,16 @@ class AgentTaskPackager:
         else:
             raise ValueError("回复 JSON 缺少根键 'items' 数组")
 
+        # Auto-detect model declared in result.json
+        if isinstance(payload, dict):
+            file_model = str(payload.get("agent_model") or payload.get("model") or "").strip()
+            if file_model and (not agent_model or agent_model in ("agent", "Codex/AutonomousAgent")):
+                agent_model = file_model
+
+        if not agent_model:
+            from ui.semi_auto_dialog import get_default_agent_model
+            agent_model = get_default_agent_model(getattr(self.pipeline, "config", None)) or "GPT-6.2 Sol Ultra"
+
         # Load bundles for this document
         task_items_file = self.workspace / "agent_tasks" / doc_key / "items.json"
         bundle_map: dict[str, ContextBundle] = {}
@@ -907,6 +917,16 @@ class AgentTaskPackager:
 
         from models.atomic_prompts import KnowledgeCardDraft
         from parser.context_bundler import ContextBundle
+
+        # Auto-detect model declared in table summary json
+        if isinstance(payload, dict):
+            file_model = str(payload.get("agent_model") or payload.get("model") or "").strip()
+            if file_model and (not agent_model or agent_model in ("agent", "TableSummaryAgent")):
+                agent_model = file_model
+
+        if not agent_model:
+            from ui.semi_auto_dialog import get_default_agent_model
+            agent_model = get_default_agent_model(getattr(self.pipeline, "config", None)) or "GPT-6.2 Sol Ultra"
 
         provenance_override = {
             "fast_llm": {
@@ -1336,6 +1356,7 @@ class AgentTaskPackager:
 2. **根结构必须满足**：
    ```json
    {{
+     "agent_model": "使用的模型名称 (如 Codex, GPT-6.2 Sol Ultra, Claude 3.7 Sonnet 等，可选)",
      "items": [
        {{
          "item_id": "{doc_key}-0",
