@@ -732,15 +732,24 @@ class AgentTaskDialog(QDialog):
 
     def _copy_agent_instructions(self) -> None:
         instr_file = self.task_dir / "task_instructions.md"
-        if instr_file.is_file():
-            text = instr_file.read_text(encoding="utf-8")
-        else:
-            text = (
-                f"请处理位于 `{self.task_dir.resolve()}` 的原子物理提取任务包。\n"
-                f"包含 items.json, tables/, schema.json, parsed.md。\n"
-                f"请根据 schema.json 输出合法的提炼结果并保存为 result.json。"
-            )
-        self._copy_to_clipboard(text, "已复制完整 Agent 提示词")
+        raw_instructions = instr_file.read_text(encoding="utf-8") if instr_file.is_file() else ""
+        doc = self.db.get_document(self.doc_id) if self.db else None
+        title = str(doc.get("title") or "—") if doc else "—"
+
+        header = (
+            f"你好，请帮我处理位于以下本地目录的原子物理计算知识提取任务：\n\n"
+            f"【工作目录】：`{self.task_dir.resolve()}`\n"
+            f"【目标文献】：`{self.doc_id}` — 《{title}》\n\n"
+            f"【执行要求】：\n"
+            f"1. 请直接访问并读取上述工作目录下的 `task_instructions.md` 与 `items.json`；\n"
+            f"2. 结合 `tables/` 目录下的表格文件与 `parsed.md` 原文；\n"
+            f"3. 严格遵循 `schema.json` 定义的格式规范进行物理提炼；\n"
+            f"4. 处理完成后，请直接在该工作目录下生成并保存 `result.json`。\n"
+            f"5. 若遇到大模型速率限制 (429) 或网络超时，请暂停并每隔 5~10 分钟轮询一次等待解除，切勿中断终止任务。\n\n"
+            f"---\n\n"
+        )
+        full_text = header + raw_instructions
+        self._copy_to_clipboard(full_text, "已复制包含完整路径的 Agent 提示词！直接粘贴给 Codex 即可。")
 
     def _copy_all_items_json(self) -> None:
         items_file = self.task_dir / "items.json"

@@ -482,7 +482,9 @@ class AgentTaskPackager:
 
         prompt = (
             f"# 数据表格物理总结任务 (Table Summary Task)\n\n"
-            f"## 文献信息\n"
+            f"## 文献信息与任务目录\n"
+            f"- 任务文件夹路径: `{task_dir.resolve()}`\n"
+            f"- 表格文件夹路径: `{tables_dir.resolve()}`\n"
             f"- 文献编号: {doc_key}\n"
             f"- 论文标题: {doc.get('title') or '—'}\n"
             f"- 出版年份: {doc.get('pub_year') or '—'}\n"
