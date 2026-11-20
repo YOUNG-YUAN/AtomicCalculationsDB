@@ -88,7 +88,7 @@ class KnowledgeMCPServer:
     def build_server(self):
         if _MCPImpl is None:
             raise MCPUnavailable("mcp 包未安装")
-        self._server = _MCPImpl("AtomicCalculationDB")
+        self._server = _MCPImpl("AtomicCalculationsDB")
         server = self._server
 
         @server.tool()

@@ -334,7 +334,7 @@ class KnowledgeDetailDialog(QDialog):
         self.db = db
         self.workspace = Path(workspace)
         self.node = db.get_knowledge_card(knw_id)
-        self.setWindowTitle(f"{knw_id} · AtomicCalculationDB")
+        self.setWindowTitle(f"{knw_id} · AtomicCalculationsDB")
         self.resize(840, 740)
         self.setMinimumSize(700, 560)
         layout = QVBoxLayout(self)
@@ -1081,7 +1081,7 @@ class DocumentDetailDialog(QDialog):
         self._reprocess_eta = EtaTracker()
         self._clipboard_packet: ClipboardPacket | None = None
         self._clipboard_service: ClipboardBatchService | None = None
-        self.setWindowTitle(f"{doc_id} · AtomicCalculationDB")
+        self.setWindowTitle(f"{doc_id} · AtomicCalculationsDB")
         self.resize(820, 720)
         self.setMinimumSize(680, 560)
         outer = QVBoxLayout(self)
@@ -1974,7 +1974,7 @@ class KeywordDetailDialog(QDialog):
         self.db = db
         self.workspace = Path(workspace)
         keyword = db.get_keyword(kw_id)
-        self.setWindowTitle(f"{kw_id} · AtomicCalculationDB")
+        self.setWindowTitle(f"{kw_id} · AtomicCalculationsDB")
         self.resize(720, 620)
         self.setMinimumSize(620, 480)
         layout = QVBoxLayout(self)

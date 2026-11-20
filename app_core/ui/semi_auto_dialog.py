@@ -76,8 +76,10 @@ def get_default_agent_model(config: Any = None) -> str:
     try:
         from PySide6.QtCore import QSettings
 
-        settings = QSettings("AtomicCalculationDB", "AtomicCalculationDB")
+        settings = QSettings("AtomicCalculationsDB", "AtomicCalculationsDB")
         val = settings.value("semi_auto_agent_model", "")
+        if not (val and str(val).strip()):
+            val = QSettings("AtomicCalculationDB", "AtomicCalculationDB").value("semi_auto_agent_model", "")
         if val and str(val).strip():
             return str(val).strip()
     except Exception:
@@ -99,7 +101,7 @@ def save_default_agent_model(model_name: str, config: Any = None) -> None:
     try:
         from PySide6.QtCore import QSettings
 
-        settings = QSettings("AtomicCalculationDB", "AtomicCalculationDB")
+        settings = QSettings("AtomicCalculationsDB", "AtomicCalculationsDB")
         settings.setValue("semi_auto_agent_model", model)
     except Exception:
         pass

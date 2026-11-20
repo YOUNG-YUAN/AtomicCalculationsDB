@@ -360,7 +360,7 @@ def _write_readme(
         if include_evidence
         else "本包未包含 L3 原始证据；如需核对上下文，请使用 source.md 或 PDF。"
     )
-    text = f"""AtomicCalculationDB · AI 校对包
+    text = f"""AtomicCalculationsDB · AI 校对包
 
 报告 ID: {report_id}
 分片数量: {part_count}

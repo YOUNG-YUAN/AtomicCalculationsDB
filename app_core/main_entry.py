@@ -191,7 +191,7 @@ def _init_services(base: Path, config: AppConfig) -> dict:
 
 
 def _parse_cli(argv: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(prog="AtomicCalculationDB", add_help=True)
+    parser = argparse.ArgumentParser(prog="AtomicCalculationsDB", add_help=True)
     parser.add_argument("--base", default=None, help="Release root directory")
     parser.add_argument("--workspace", default=None, help="Workspace directory")
     parser.add_argument("--mcp", action="store_true", help="Start MCP stdio server")
@@ -575,8 +575,8 @@ def start_gui_app(base_dir: str) -> int:
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
     )
     app = QApplication.instance() or QApplication(sys.argv)
-    app.setApplicationName("AtomicCalculationDB")
-    app.setOrganizationName("AtomicCalculationDB")
+    app.setApplicationName("AtomicCalculationsDB")
+    app.setOrganizationName("AtomicCalculationsDB")
     app.setApplicationVersion(version)
     app.setWindowIcon(app_icon())
     app.setQuitOnLastWindowClosed(True)

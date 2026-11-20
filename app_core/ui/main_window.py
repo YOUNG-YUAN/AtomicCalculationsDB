@@ -141,7 +141,7 @@ class TitleBar(QWidget):
         layout.addWidget(logo)
         title_box = QVBoxLayout()
         title_box.setSpacing(0)
-        title = QLabel("AtomicCalculationDB")
+        title = QLabel("AtomicCalculationsDB")
         title.setObjectName("AppTitle")
         title.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         subtitle = QLabel(f"Atomic Data Knowledge Base · v{version}")
@@ -283,7 +283,7 @@ class MainWindow(QMainWindow):
         self._normal_geometry = None
         version = read_version(self.base_dir / "app_core").get("version", "2.3.10")
 
-        self.setWindowTitle("AtomicCalculationDB")
+        self.setWindowTitle("AtomicCalculationsDB")
         self.setWindowIcon(app_icon())
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
@@ -392,7 +392,7 @@ class MainWindow(QMainWindow):
         if not QSystemTrayIcon.isSystemTrayAvailable():
             return
         tray = QSystemTrayIcon(app_icon(), self)
-        tray.setToolTip("AtomicCalculationDB · 原子物理知识库")
+        tray.setToolTip("AtomicCalculationsDB · 原子物理知识库")
         menu = QMenu(self)
         show_action = QAction("打开主窗口", self)
         show_action.triggered.connect(self._restore_window)

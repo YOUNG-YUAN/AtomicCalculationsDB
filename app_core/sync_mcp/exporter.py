@@ -44,7 +44,7 @@ def export_pending_html(db: SQLiteManager, workspace_dir: str | Path) -> Path:
     )
     page = f"""<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8">
-<title>AtomicCalculationDB · 待下载清单</title>
+<title>AtomicCalculationsDB · 待下载清单</title>
 <style>
 body {{ margin:0; padding:40px; background:#F8FAFD; color:#1B1B1F;
        font-family:"Segoe UI","Microsoft YaHei UI",sans-serif; }}
@@ -63,7 +63,7 @@ td.title {{ max-width:420px; }}
 </style></head><body>
 <h1>待手动下载清单</h1>
 <p class="sub">共 {len(documents)} 篇 · 生成于 {datetime.now().strftime("%Y-%m-%d %H:%M")} ·
-下载后拖入 AtomicCalculationDB 或放入 workspace/inbox_manual 自动导入并解析</p>
+下载后拖入 AtomicCalculationsDB 或放入 workspace/inbox_manual 自动导入并解析</p>
 <table><thead><tr><th>DOC-ID</th><th>标题</th><th>作者</th><th>期刊</th><th>年份</th><th>DOI / 链接</th></tr></thead>
 <tbody>{body}</tbody></table>
 </body></html>"""
