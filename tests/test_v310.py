@@ -670,3 +670,91 @@ def test_agent_workbench_and_cli_dispatch(tmp_path):
     assert code == 0
 
 
+def test_rate_limit_detection_and_execute_resilience(tmp_path):
+    from sync_mcp.agent_task_packager import is_rate_limit_or_timeout_error, AgentTaskPackager
+    from db.sqlite_manager import SQLiteManager
+    from parser.context_bundler import ContextBundle
+    from models.atomic_prompts import KnowledgeCardDraft
+
+    # 1. Test error classification
+    assert is_rate_limit_or_timeout_error(RuntimeError("HTTP 429 Too Many Requests"))
+    assert is_rate_limit_or_timeout_error(Exception("Rate limit reached for model gpt-4o"))
+    assert is_rate_limit_or_timeout_error(Exception("TPM limit exceeded, please wait 300s"))
+    assert is_rate_limit_or_timeout_error(TimeoutError("Connection timed out"))
+    assert not is_rate_limit_or_timeout_error(ValueError("Invalid syntax"))
+
+    # 2. Test execute resilience with auto-pause & polling
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    db = SQLiteManager(workspace)
+
+    doc_id = "DOC-PAP-2024-C3D4E5"
+    storage_dir = workspace / "storage" / doc_id
+    storage_dir.mkdir(parents=True)
+    pdf_file = storage_dir / "paper.pdf"
+    pdf_file.write_bytes(b"%PDF-1.4 test")
+
+    parsed_md = storage_dir / "parsed.md"
+    parsed_md.write_text("# Paper\n\nMethod discussion.", encoding="utf-8")
+
+    bundle1 = ContextBundle(doc_id=doc_id, section_path="Sec 1", focal_sentence="Line 1.")
+    bundle2 = ContextBundle(doc_id=doc_id, section_path="Sec 2", focal_sentence="Line 2.")
+    bundles_file = storage_dir / "bundles.json"
+    bundles_file.write_text(
+        json.dumps([bundle1.model_dump(mode="json"), bundle2.model_dump(mode="json")]),
+        encoding="utf-8",
+    )
+
+    db.upsert_document({
+        "doc_id": doc_id,
+        "title": "Resilience Test Paper",
+        "doc_type": "PAP",
+        "pub_year": 2024,
+        "local_pdf_path": str(pdf_file.relative_to(workspace)),
+        "parse_status": "LIGHT_PARSED",
+    })
+
+    pipeline = MagicMock()
+    pipeline._store_draft.return_value = "KNW-TEST-RES"
+    packager = AgentTaskPackager(db, workspace, pipeline=pipeline)
+
+    # Mock extractor that simulates a 429 rate limit on first attempt, then succeeds
+    attempts = {"count": 0}
+    card_draft = KnowledgeCardDraft(
+        card_type="MODEL",
+        title_zh="测试卡片",
+        summary_zh="测试内容",
+        premises_and_conditions="全温全压",
+    )
+
+    def mock_extractor(bundle):
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise RuntimeError("HTTP 429: Rate limit reached, please retry later")
+        return {
+            "skip": False,
+            "cards": [card_draft.model_dump(mode="json")],
+            "keywords": [{"term_en": "Relativity"}],
+        }
+
+    # Execute with short poll interval (1s) to test pause & recovery
+    res = packager.execute_task_bundle(
+        doc_id,
+        poll_interval_sec=1,
+        custom_extractor=mock_extractor,
+        auto_submit=True,
+    )
+    assert res["ok"] is True
+    assert res["total_items"] == 2
+    assert res["completed_items"] == 2
+    assert res["is_complete"] is True
+    assert attempts["count"] >= 3  # 1 failure + 2 successes
+
+    # Verify task instructions contains rate limit section
+    task_dir = workspace / "agent_tasks" / doc_id
+    instr = (task_dir / "task_instructions.md").read_text(encoding="utf-8")
+    assert "限额、超时与断点续传弹性规则" in instr
+    assert "绝对禁止因限额或超时中断任务" in instr
+
+
+

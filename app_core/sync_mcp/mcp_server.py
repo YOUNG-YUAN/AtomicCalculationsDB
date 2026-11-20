@@ -76,6 +76,7 @@ class KnowledgeMCPServer:
                     "export_agent_task_bundle",
                     "submit_agent_task_result",
                     "get_agent_task_status",
+                    "execute_agent_task",
                 ]
             )
         return {
@@ -342,6 +343,26 @@ class KnowledgeMCPServer:
         def get_agent_task_status(doc_id: str) -> str:
             """Check status of an agent task folder and doc extraction progress."""
             return _wb_call("get_agent_task_status", doc_id=doc_id)
+
+        @server.tool()
+        def execute_agent_task(
+            doc_id: str,
+            poll_interval_sec: int = 300,
+            agent_name: str = "antigravity",
+            agent_model: str = "",
+            force: bool = False,
+            auto_submit: bool = True,
+        ) -> str:
+            """Execute agent task with auto-pause & rate-limit polling resilience (every 5-10m on 429/timeout)."""
+            return _wb_call(
+                "execute_agent_task",
+                doc_id=doc_id,
+                poll_interval_sec=poll_interval_sec,
+                agent_name=agent_name,
+                agent_model=agent_model,
+                force=force,
+                auto_submit=auto_submit,
+            )
 
 
         return server

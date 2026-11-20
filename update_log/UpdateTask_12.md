@@ -189,27 +189,43 @@ workspace/agent_tasks/<DOC-ID>/
 
 ### 8.2 核心模块实现与职责划分
 1. **`AgentTaskPackager` (`app_core/sync_mcp/agent_task_packager.py`)**：
-   - `export_task_bundle(doc_id, out_dir=None, force=False)`：自动解析文献、提取并生成 `Table_X.md` 独立表格、复制图像、构建结构化 `items.json` 与 `schema.json`，并撰写包含物理规范的 `task_instructions.md`；
-   - `submit_task_result(doc_id, result_path_or_json, agent_name, agent_model)`：解析并严格校验 Agent 输出，反查证据包（ContextBundle），调用 `pipeline._store_draft` 批量入库 L2 知识卡片与关键词，自动更新文献状态至 `LLM_EXTRACTED` 并记录审计事件；支持字符串关键词智能归一化；
-   - `get_task_status(doc_id)`：快速检测文献任务目录是否存在、条目数量、是否已生成 `result.json` 以及库中已入库卡片统计。
+   - `export_task_bundle(doc_id, out_dir=None, force=False)`：自动解析文献、提取并生成 `Table_X.md` 独立表格、复制图像、构建结构化 `items.json` 与 `schema.json`，并撰写包含物理规范与限额弹性指南的 `task_instructions.md`；
+   - `submit_task_result(doc_id, result_path_or_json, agent_name, agent_model, complete=None)`：解析并严格校验 Agent 输出，支持增量提交与断点更新（部分提交标记为 `PARTIAL_EXTRACTED`，全量完成跃迁至 `LLM_EXTRACTED`）；
+   - `get_task_status(doc_id)`：快速检测文献任务目录是否存在、总条目数、已完成项、进度百分比、是否已生成 `result.json` 以及库中已入库卡片统计；
+   - `execute_task_bundle(doc_id, poll_interval_sec=300, ...)`：内置韧性自动执行器，遇到 429、TPM/RPM 限额或超时异常时，自动安全挂起暂停，每隔 5~10 分钟定时轮询探测，配额恢复后自动从断点继续执行，绝不中断。
 2. **`AgentWorkbenchService` & `RuntimeBridgeServer` 集成**：
-   - 在工作台接口与运行桥（HTTP Bridge）中增加 `export_agent_task_bundle`、`submit_agent_task_result` 与 `get_agent_task_status` 支持；
+   - 在工作台接口与运行桥（HTTP Bridge）中增加 `export_agent_task_bundle`、`submit_agent_task_result`、`get_agent_task_status` 与 `execute_agent_task` 支持；
    - 当桌面 GUI 运行时，CLI 自动连接 HTTP Bridge 代理操作，完全避免 SQLite 和 Qdrant 向量库的文件锁与单写者冲突；若桥接不可用，自动安全回退至本地 Headless 独立服务模式。
 3. **`KnowledgeMCPServer` 工具扩展 (`app_core/sync_mcp/mcp_server.py`)**：
-   - 向 Claude Desktop、Cursor、Cherry Studio 等 MCP 客户端原生暴露上述三项任务工单工具。
+   - 向 Claude Desktop、Cursor、Cherry Studio 等 MCP 客户端原生暴露上述四项任务工单工具。
 
-### 8.3 Agent CLI 交互支持 (`python -m app_core agent` / `AtomicCalculationDB.exe agent`)
+### 8.3 限额、超时与断点续传弹性机制 (Rate Limit & Resume Resilience)
+针对 CODEX、Claude、Antigravity 等自主 Agent 在批量处理大量条目时存在的配额与速率限制（HTTP 429、TPM/RPM 耗尽、额度限制）及网络/网关超时问题：
+1. **自解释任务指引约束 (`task_instructions.md` 第五节)**：
+   - 明确规则：**绝对禁止因限额或超时中断任务**；遇到 429 或超时必须将任务置为**暂停状态 (Pause)**，而非**中断终止 (Abort)**；
+   - 规定 Agent 必须每隔 5 分钟或 10 分钟进行一次探测轮询，等到限额解除后自动无缝继续提取后续条目；
+   - 规定 Agent 每完成一个条目即持久化追加写入 `result.json`，启动时自动反查已完成 `item_id` 实现断点续传。
+2. **CLI 内置韧性执行命令 (`python -m app_core agent execute`)**：
+   - 自动遍历 `items.json`，遇到 API 429 限额或 Timeout 异常时，在终端打印友好倒计时提示，进入挂起等待；
+   - 默认每隔 300 秒（5 分钟，可通过 `--interval` 自定义为 600 秒即 10 分钟）向模型端发起一次轻量测试探测；
+   - 一旦检测到限额恢复，自动打印恢复提示并从中断条目继续处理，零重复、零丢件，全部完成后自动入库。
+
+### 8.4 Agent CLI 交互支持 (`python -m app_core agent` / `AtomicCalculationDB.exe agent`)
 在不启动 Qt 界面图形的情况下，命令行直接支持完整的 Agent 交互：
 - **任务导出**：
   ```bash
   python -m app_core agent export DOC-PAP-0000-E284F0
   ```
   输出包含任务目录绝对路径与清单统计的 JSON，Agent 可直接基于目录开展分析。
-- **状态查询**：
+- **状态与进度查询**：
   ```bash
   python -m app_core agent status DOC-PAP-0000-E284F0
   ```
-- **提炼结果入库**：
+- **韧性自动执行（带限额暂停与5~10分钟轮询恢复）**：
+  ```bash
+  python -m app_core agent execute DOC-PAP-0000-E284F0 --interval 300 --model GPT-6.2
+  ```
+- **提炼结果入库（支持全量与增量断点提交）**：
   ```bash
   # 方式 1：直接提交已生成的 result.json（缺省时自动查找任务目录下的 result.json）
   python -m app_core agent submit DOC-PAP-0000-E284F0
@@ -223,9 +239,10 @@ workspace/agent_tasks/<DOC-ID>/
 
 ## 9. 自动化测试与全量验收
 
-- **测试用例总数**：由原 249 项扩展为 **251 项**；
-- **全量回归状态**：`pytest tests/` 251 项测试 100% 全部通过（0 失败，0 错误）；
+- **测试用例总数**：由原 249 项扩展为 **252 项**；
+- **全量回归状态**：`pytest tests/` 252 项测试 100% 全部通过（0 失败，0 错误）；
 - **新增 Agent 专项测试 (`tests/test_v310.py`)**：
-  1. `test_agent_task_packager_export_and_submit`：端到端验证任务目录导出完整性（目录结构、文件存在性、骨架表引用）、状态检查、结果提交（L2 卡片入库、关键词解析、文献状态跃迁至 `LLM_EXTRACTED`）；
-  2. `test_agent_workbench_and_cli_dispatch`：验证命令行解析器对 `agent export/submit/status` 子命令的分发、`--base` 与 `--workspace` 参数穿透以及 Headless 独立服务安全退出。
+  1. `test_agent_task_packager_export_and_submit`：端到端验证任务目录导出完整性（目录结构、文件存在性、骨架表引用）、状态检查、结果提交（L2 卡片入库、关键词解析、文献状态跃迁）；
+  2. `test_agent_workbench_and_cli_dispatch`：验证命令行解析器对 `agent export/submit/status/execute` 子命令的分发、`--base` 与 `--workspace` 参数穿透以及 Headless 独立服务安全退出；
+  3. `test_rate_limit_detection_and_execute_resilience`：测试 429 / 限额 / 超时错误精准识别、执行器遇到限额自动挂起暂停、定时轮询探测解除后断点恢复与结果完整入库。
 

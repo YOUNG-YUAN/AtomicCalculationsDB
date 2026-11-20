@@ -741,6 +741,38 @@ class AgentWorkbenchService:
             log.exception("get_agent_task_status failed for %s", doc_id)
             raise
 
+    def execute_agent_task(
+        self,
+        doc_id: str,
+        *,
+        poll_interval_sec: int = 300,
+        agent_name: str = "agent",
+        agent_model: str = "",
+        force: bool = False,
+        auto_submit: bool = True,
+    ) -> dict[str, Any]:
+        """Execute agent task extraction with pause & rate-limit polling resilience."""
+        self._require_task_write()
+        from sync_mcp.agent_task_packager import AgentTaskPackager
+
+        try:
+            packager = AgentTaskPackager(self.db, self.workspace, pipeline=self.pipeline)
+            res = packager.execute_task_bundle(
+                doc_id,
+                poll_interval_sec=poll_interval_sec,
+                agent_name=agent_name,
+                agent_model=agent_model,
+                force=force,
+                auto_submit=auto_submit,
+            )
+            self._notify_changed()
+            return res
+        except ValueError as exc:
+            raise WorkbenchInputError(str(exc)) from exc
+        except Exception as exc:
+            log.exception("execute_agent_task failed for %s", doc_id)
+            raise
+
 
 
 __all__ = [

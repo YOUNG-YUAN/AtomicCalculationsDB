@@ -10,8 +10,10 @@ import json
 import logging
 import re
 import shutil
+import sys
+import time
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 from models.atomic_prompts import ExtractionResult
 from parser.context_bundler import ContextBundle
@@ -20,6 +22,40 @@ from parser.table_compressor import skeletonize_table_markdown
 log = logging.getLogger(__name__)
 
 _TABLE_REF_RE = re.compile(r"\b(?:Table|TABLE|Tab\.|表)\s*([0-9IVXLC]+)", re.I)
+
+
+def is_rate_limit_or_timeout_error(exc: Exception) -> bool:
+    """Detect whether an exception is caused by API rate limiting, quota exhaustion, or request timeout."""
+    try:
+        import httpx
+
+        if isinstance(exc, (httpx.TimeoutException, TimeoutError)):
+            return True
+        if isinstance(exc, httpx.HTTPStatusError):
+            if exc.response.status_code in (429, 503):
+                return True
+            text = str(getattr(exc.response, "text", "") or "").lower()
+            if any(k in text for k in ("rate limit", "tpm", "rpm", "quota", "too many requests")):
+                return True
+    except ImportError:
+        pass
+    msg = str(exc).lower()
+    return any(
+        k in msg
+        for k in (
+            "429",
+            "rate limit",
+            "ratelimit",
+            "too many requests",
+            "quota",
+            "tpm",
+            "rpm",
+            "timed out",
+            "timeout",
+            "overloaded",
+            "capacity",
+        )
+    )
 
 
 class AgentTaskPackager:
@@ -251,6 +287,7 @@ class AgentTaskPackager:
         *,
         agent_name: str = "agent",
         agent_model: str = "",
+        complete: bool | None = None,
     ) -> dict[str, Any]:
         """Validate and ingest an agent-generated result.json into the knowledge database."""
         doc_key = str(doc_id or "").strip()
@@ -386,22 +423,37 @@ class AgentTaskPackager:
 
             stored_keywords += len(extraction.keywords)
 
-        # Update document parse status
-        self.db.update_parse_status(doc_key, "LLM_EXTRACTED")
+        # Determine whether this is a full or partial completion
+        task_items_file = self.workspace / "agent_tasks" / doc_key / "items.json"
+        total_items = len(bundle_map) if bundle_map else valid_items_count
+        if task_items_file.is_file():
+            try:
+                task_items_raw = json.loads(task_items_file.read_text(encoding="utf-8"))
+                total_items = max(total_items, len(task_items_raw))
+            except Exception:
+                pass
+
+        is_complete = (valid_items_count >= total_items) if complete is None else bool(complete)
+        new_status = "LLM_EXTRACTED" if is_complete else "PARTIAL_EXTRACTED"
+        self.db.update_parse_status(doc_key, new_status)
         self.db.log_event(
             "INFO",
             "agent_submit",
-            f"{doc_key} Agent 提炼结果入库：{stored_cards} 张知识卡片、{stored_keywords} 个关键词",
+            f"{doc_key} Agent 提炼结果入库：{stored_cards} 张知识卡片、{stored_keywords} 个关键词 (进度: {valid_items_count}/{total_items}, 状态: {new_status})",
             doc_id=doc_key,
         )
 
         return {
             "ok": True,
             "doc_id": doc_key,
+            "total_items": total_items,
             "processed_items": valid_items_count,
+            "pending_items": max(0, total_items - valid_items_count),
             "stored_cards": stored_cards,
             "stored_keywords": stored_keywords,
             "skipped_items": skipped_items,
+            "is_complete": is_complete,
+            "status": new_status,
         }
 
     def get_task_status(self, doc_id: str) -> dict[str, Any]:
@@ -422,6 +474,19 @@ class AgentTaskPackager:
 
         result_file = task_dir / "result.json" if has_task_dir else None
         has_result = result_file.is_file() if result_file else False
+        completed_in_result = 0
+        if has_result:
+            try:
+                res_data = json.loads(result_file.read_text(encoding="utf-8"))
+                if isinstance(res_data, dict) and "items" in res_data:
+                    completed_in_result = len(res_data["items"])
+                elif isinstance(res_data, list):
+                    completed_in_result = len(res_data)
+            except Exception:
+                pass
+
+        progress_str = f"{(completed_in_result / items_count * 100):.1f}%" if items_count > 0 else "0%"
+        is_complete = (completed_in_result >= items_count) if items_count > 0 else False
 
         if hasattr(self.db, "cards_for_document"):
             cards = self.db.cards_for_document(doc_key)
@@ -438,9 +503,202 @@ class AgentTaskPackager:
             "has_task_bundle": has_task_dir,
             "task_dir": str(task_dir.resolve()) if has_task_dir else "",
             "item_count": items_count,
+            "total_items": items_count,
+            "completed_items": completed_in_result,
+            "pending_items": max(0, items_count - completed_in_result),
+            "progress_percent": progress_str,
+            "is_complete": is_complete,
             "has_result_json": has_result,
             "stored_cards_count": len(cards),
         }
+
+    def execute_task_bundle(
+        self,
+        doc_id: str,
+        *,
+        poll_interval_sec: int = 300,
+        agent_name: str = "agent",
+        agent_model: str = "",
+        force: bool = False,
+        auto_submit: bool = True,
+        should_stop: Callable[[], bool] | None = None,
+        on_progress: Callable[[dict[str, Any]], None] | None = None,
+        custom_extractor: Callable[[ContextBundle], Any] | None = None,
+    ) -> dict[str, Any]:
+        """Execute extraction on items.json with pause & rate-limit polling resilience.
+
+        When hitting an API rate limit (HTTP 429 / TPM / RPM exhaustion / quota limits)
+        or a network/gateway timeout, the task is NOT aborted. It pauses and polls
+        every ``poll_interval_sec`` (e.g. 300s = 5min, 600s = 10min) until the quota
+        resets, then resumes seamlessly from the exact breakpoint without data loss.
+        """
+        doc_key = str(doc_id or "").strip()
+        doc = self.db.get_document(doc_key)
+        if not doc:
+            raise ValueError(f"找不到文献：{doc_key}")
+
+        task_dir = self.workspace / "agent_tasks" / doc_key
+        items_file = task_dir / "items.json"
+        if not items_file.is_file():
+            self.export_task_bundle(doc_key, force=force)
+
+        if not items_file.is_file():
+            raise RuntimeError(f"任务文件 {items_file} 不存在")
+
+        items_raw = json.loads(items_file.read_text(encoding="utf-8"))
+        if not items_raw:
+            return {"ok": True, "doc_id": doc_key, "total_items": 0, "completed_items": 0}
+
+        # Check existing result.json for resume
+        result_file = task_dir / "result.json"
+        completed_results: dict[str, Any] = {}
+        if result_file.is_file() and not force:
+            try:
+                res_content = json.loads(result_file.read_text(encoding="utf-8"))
+                items_list = res_content.get("items", []) if isinstance(res_content, dict) else res_content
+                for entry in items_list:
+                    if isinstance(entry, dict) and "item_id" in entry:
+                        completed_results[entry["item_id"]] = entry
+            except Exception:
+                completed_results = {}
+
+        total_items = len(items_raw)
+        log.info(
+            "Executing task bundle for %s: %d total items, %d already completed",
+            doc_key,
+            total_items,
+            len(completed_results),
+        )
+
+        doc_metadata = {
+            "title": doc.get("title") or "",
+            "authors": doc.get("authors_list") or [],
+            "journal": doc.get("journal") or "",
+            "year": doc.get("pub_year"),
+            "doc_type": doc.get("doc_type") or "PAP",
+        }
+
+        # Determine extractor function
+        if custom_extractor is not None:
+            extract_fn = custom_extractor
+        elif self.pipeline is not None and getattr(self.pipeline, "gateway", None) is not None:
+            extract_fn = lambda b: self.pipeline.gateway.extract_cards(b, doc_metadata=doc_metadata)
+        else:
+            raise RuntimeError("Pipeline 或 Gateway 未提供，无法执行物理提炼。请提供 custom_extractor 或初始化 Pipeline。")
+
+        for idx, item in enumerate(items_raw, start=1):
+            if should_stop and should_stop():
+                log.info("Task execution interrupted by stop signal")
+                break
+
+            item_id = item["item_id"]
+            if item_id in completed_results:
+                continue
+
+            bundle = ContextBundle.model_validate(item["bundle_payload"])
+            attempt = 0
+            while not (should_stop and should_stop()):
+                attempt += 1
+                try:
+                    res_obj = extract_fn(bundle)
+                    if hasattr(res_obj, "model_dump"):
+                        res_data = res_obj.model_dump(mode="json")
+                    elif isinstance(res_obj, dict):
+                        res_data = res_obj
+                    else:
+                        res_data = {"skip": False, "cards": [], "keywords": []}
+
+                    completed_results[item_id] = {
+                        "item_id": item_id,
+                        "result": res_data,
+                    }
+
+                    # Write checkpoint immediately
+                    submission_payload = {"items": list(completed_results.values())}
+                    result_file.write_text(
+                        json.dumps(submission_payload, ensure_ascii=False, indent=2),
+                        encoding="utf-8",
+                    )
+
+                    if on_progress:
+                        on_progress({
+                            "current": len(completed_results),
+                            "total": total_items,
+                            "item_id": item_id,
+                            "percent": f"{(len(completed_results) / total_items * 100):.1f}%",
+                        })
+                    break
+
+                except Exception as exc:
+                    if is_rate_limit_or_timeout_error(exc):
+                        print(
+                            f"\n[PAUSED] 条目 {item_id} 遭遇 API 限额或请求超时: {exc}\n"
+                            f"任务已暂停（未中断）。将每隔 {poll_interval_sec} 秒（{poll_interval_sec // 60} 分钟）轮询探测一次限额是否解除...",
+                            file=sys.stderr,
+                            flush=True,
+                        )
+                        log.warning(
+                            "Rate limit / timeout on %s (item %s, attempt %d): %s. Pausing for %ds before probe...",
+                            doc_key,
+                            item_id,
+                            attempt,
+                            exc,
+                            poll_interval_sec,
+                        )
+                        waited = 0
+                        stopped = False
+                        while waited < poll_interval_sec:
+                            if should_stop and should_stop():
+                                stopped = True
+                                break
+                            time.sleep(1)
+                            waited += 1
+                        if stopped:
+                            break
+
+                        print(
+                            f"[POLL] 冷却时间已到，正在探测并重试条目 {item_id}...",
+                            file=sys.stderr,
+                            flush=True,
+                        )
+                    else:
+                        log.error("Non-rate-limit error on %s item %s: %s", doc_key, item_id, exc)
+                        completed_results[item_id] = {
+                            "item_id": item_id,
+                            "result": {
+                                "skip": True,
+                                "skip_reason": f"提取异常: {exc}",
+                                "cards": [],
+                                "keywords": [],
+                            },
+                        }
+                        submission_payload = {"items": list(completed_results.values())}
+                        result_file.write_text(
+                            json.dumps(submission_payload, ensure_ascii=False, indent=2),
+                            encoding="utf-8",
+                        )
+                        break
+
+        # Submit if required and has results
+        submit_summary = {}
+        if auto_submit and completed_results:
+            submit_summary = self.submit_task_result(
+                doc_key,
+                result_file,
+                agent_name=agent_name,
+                agent_model=agent_model,
+            )
+
+        return {
+            "ok": True,
+            "doc_id": doc_key,
+            "total_items": total_items,
+            "completed_items": len(completed_results),
+            "is_complete": len(completed_results) >= total_items,
+            "result_file": str(result_file.resolve()),
+            "submission": submit_summary,
+        }
+
 
     @staticmethod
     def _build_instructions_markdown(
@@ -560,6 +818,24 @@ class AgentTaskPackager:
    ```bash
    python -m app_core agent submit {doc_key} result.json
    ```
+
+---
+
+## 五、限额、超时与断点续传弹性规则 (极重要：Rate Limit & Resume Resilience)
+针对 CODEX、Claude、Antigravity 等自主 Agent 在批量处理大量条目时可能遭遇的 API 速率限制（Rate Limit / TPM / RPM 耗尽 / HTTP 429）或网络网关超时（Timeout），请严格遵守以下弹性策略：
+
+1. **绝对禁止因限额或超时中断任务**：
+   - 遭遇 429、速率限制、额度暂时不足或请求超时等异常时，**严禁报错退出、抛出致命异常或放弃任务**；
+   - 必须将当前任务置为**暂停状态 (Pause)**，绝不可**中断终止 (Abort)**。
+
+2. **定时轮询等待机制 (建议每 5 ~ 10 分钟一次)**：
+   - 进入等待冷却状态，**每隔 5 分钟或 10 分钟轮询一次**（发起一次轻量测试探测请求或检查配额恢复时间）；
+   - 一旦检测到 API 限额解除或网络恢复，立即自动无缝继续提取后续条目。
+
+3. **断点续传与增量持久化 (`result.json`)**：
+   - 推荐每完成一个条目或一个批次，立即将已生成的有效条目持久化追加写入 `result.json`；
+   - 若遇到意外中断或环境重启，重新启动时先读取 `result.json` 中已有的 `item_id` 集合，直接从下一个未处理条目开始（断点续传），无需从头重算；
+   - 系统支持多次运行 `python -m app_core agent submit {doc_key}` 进行增量入库；只有当所有条目均已完成并提交后，文献状态才会转为完整的 `LLM_EXTRACTED`。
 """
 
 

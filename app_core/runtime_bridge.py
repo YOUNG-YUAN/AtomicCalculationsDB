@@ -308,6 +308,7 @@ class RuntimeBridgeServer:
                 "export_agent_task_bundle",
                 "submit_agent_task_result",
                 "get_agent_task_status",
+                "execute_agent_task",
             }
             if action not in allowed:
                 raise BridgeUnavailable(f"unsupported workbench action: {action}")
@@ -606,6 +607,26 @@ class BridgeWorkbench:
 
     def get_agent_task_status(self, doc_id: str) -> dict[str, Any]:
         return self._call("get_agent_task_status", doc_id=doc_id)
+
+    def execute_agent_task(
+        self,
+        doc_id: str,
+        *,
+        poll_interval_sec: int = 300,
+        agent_name: str = "agent",
+        agent_model: str = "",
+        force: bool = False,
+        auto_submit: bool = True,
+    ) -> dict[str, Any]:
+        return self._call(
+            "execute_agent_task",
+            doc_id=doc_id,
+            poll_interval_sec=poll_interval_sec,
+            agent_name=agent_name,
+            agent_model=agent_model,
+            force=force,
+            auto_submit=auto_submit,
+        )
 
 
 

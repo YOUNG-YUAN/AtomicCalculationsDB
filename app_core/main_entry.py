@@ -226,6 +226,26 @@ def _parse_cli(argv: list[str]) -> argparse.Namespace:
     status_p = agent_sub.add_parser("status", help="Get agent task status for a document")
     status_p.add_argument("doc_id", help="Document ID")
 
+    # agent execute <doc_id> [--interval <sec>] [--model <model>] [--agent-name <name>] [--force] [--no-submit]
+    execute_p = agent_sub.add_parser(
+        "execute",
+        help="Execute extraction with pause & rate-limit polling resilience (every 5-10m)",
+    )
+    execute_p.add_argument("doc_id", help="Document ID")
+    execute_p.add_argument(
+        "--interval",
+        dest="poll_interval",
+        type=int,
+        default=300,
+        help="Polling interval in seconds when hitting rate limit / timeout (default: 300s = 5m)",
+    )
+    execute_p.add_argument("--model", dest="agent_model", default="", help="LLM model name")
+    execute_p.add_argument("--agent-name", default="agent", help="Agent identifier")
+    execute_p.add_argument("--force", action="store_true", help="Force re-processing already completed items")
+    execute_p.add_argument(
+        "--no-submit", dest="no_submit", action="store_true", help="Do not auto-submit to DB on completion"
+    )
+
     args, _unknown = parser.parse_known_args(argv[1:])
     for idx, token in enumerate(argv):
         if token == "--base" and idx + 1 < len(argv) and getattr(args, "base", None) is None:
@@ -363,6 +383,50 @@ def _run_agent_cli(base: Path, config: AppConfig, args: argparse.Namespace) -> i
                 services = _init_services(base, config)
                 try:
                     res = services["workbench"].get_agent_task_status(doc_id)
+                finally:
+                    _close_services(services)
+            print(json.dumps(res, ensure_ascii=False, indent=2))
+            return 0 if res.get("ok") else 1
+        except Exception as exc:
+            print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False, indent=2), file=sys.stderr)
+            return 1
+
+    # 4. Action: execute (with auto-pause and rate-limit polling resilience)
+    elif action == "execute":
+        doc_id = str(args.doc_id or "").strip()
+        poll_interval = int(getattr(args, "poll_interval", 300) or 300)
+        agent_name = str(getattr(args, "agent_name", "agent") or "agent")
+        agent_model = str(getattr(args, "agent_model", "") or "")
+        force = bool(getattr(args, "force", False))
+        auto_submit = not bool(getattr(args, "no_submit", False))
+
+        try:
+            res = None
+            if bridge is not None:
+                log.info("Runtime bridge detected at %s (pid %s); delegating execute", bridge.base_url, bridge.pid)
+                try:
+                    res = BridgeWorkbench(bridge).execute_agent_task(
+                        doc_id,
+                        poll_interval_sec=poll_interval,
+                        agent_name=agent_name,
+                        agent_model=agent_model,
+                        force=force,
+                        auto_submit=auto_submit,
+                    )
+                except Exception as b_exc:
+                    log.warning("Bridge delegation failed (%s), falling back to direct service execution", b_exc)
+                    res = None
+            if res is None:
+                services = _init_services(base, config)
+                try:
+                    res = services["workbench"].execute_agent_task(
+                        doc_id,
+                        poll_interval_sec=poll_interval,
+                        agent_name=agent_name,
+                        agent_model=agent_model,
+                        force=force,
+                        auto_submit=auto_submit,
+                    )
                 finally:
                     _close_services(services)
             print(json.dumps(res, ensure_ascii=False, indent=2))
