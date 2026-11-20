@@ -1219,6 +1219,44 @@ def test_agent_rejection_dialog_and_gui_flow(qapp, tmp_path: Path):
     updated_doc = db.get_document(doc_id)
     assert updated_doc["parse_status"] == "LLM_EXTRACTED"
 
+    # Verify buttons state transitioned to green & disabled
+    assert dlg.verify_btn.text() == "✅ 已验收通过"
+    assert not dlg.verify_btn.isEnabled()
+    assert dlg.auto_verify_tab_btn.text() == "✅ 已验收通过"
+    assert not dlg.auto_verify_tab_btn.isEnabled()
+    assert not dlg.import_items_file_btn.isEnabled()
+    assert not dlg.paste_items_reply_btn.isEnabled()
+
+    # Verify resetting state restores active buttons
+    dlg._update_verification_buttons_state(False)
+    assert dlg.verify_btn.text() == "⚡ 检测并一键验收 result.json"
+    assert dlg.verify_btn.isEnabled()
+    assert dlg.auto_verify_tab_btn.text() == "⚡ 自动验收 result.json"
+    assert dlg.auto_verify_tab_btn.isEnabled()
+    assert dlg.import_items_file_btn.isEnabled()
+    assert dlg.paste_items_reply_btn.isEnabled()
+
+
+def test_async_progress_dialog(qapp):
+    from ui.progress_dialog import AsyncProgressDialog, run_task_with_progress
+
+    dlg = AsyncProgressDialog(title="测试进度", message="正在执行测试任务...")
+    dlg.update_progress(5, 10, "测试进度中...")
+    assert dlg.progress_bar.maximum() == 10
+    assert dlg.progress_bar.value() == 5
+    assert "5/10" in dlg.title_label.text()
+    assert "测试进度中" in dlg.detail_label.text()
+
+    def dummy_task(x: int, y: int, progress_callback=None):
+        if progress_callback:
+            progress_callback(1, 2, "第 1 步")
+            progress_callback(2, 2, "第 2 步")
+        return x + y
+
+    res = run_task_with_progress(dlg, dummy_task, 10, 20)
+    assert res == 30
+
+
 
 
 

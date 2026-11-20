@@ -553,43 +553,43 @@ class AgentTaskDialog(QDialog):
         bar.addStretch(1)
 
         # Auto verify button
-        auto_verify_tab_btn = QPushButton("⚡ 自动验收 result.json")
-        auto_verify_tab_btn.setObjectName("Pill")
-        auto_verify_tab_btn.setToolTip("自动识别目录下是否有 result.json，尝试解析校验，成功则通过入库，存在问题则打回并生成重做提示词。")
-        auto_verify_tab_btn.setStyleSheet(
+        self.auto_verify_tab_btn = QPushButton("⚡ 自动验收 result.json")
+        self.auto_verify_tab_btn.setObjectName("Pill")
+        self.auto_verify_tab_btn.setToolTip("自动识别目录下是否有 result.json，尝试解析校验，成功则通过入库，存在问题则打回并生成重做提示词。")
+        self.auto_verify_tab_btn.setStyleSheet(
             "QPushButton {"
             " background: #0284c7; color: #ffffff; border: 1px solid #0369a1;"
             " border-radius: 4px; padding: 5px 12px; font-weight: bold;"
             "}"
             "QPushButton:hover { background: #0369a1; }"
         )
-        auto_verify_tab_btn.clicked.connect(self._verify_and_ingest_result_json)
-        bar.addWidget(auto_verify_tab_btn)
+        self.auto_verify_tab_btn.clicked.connect(self._verify_and_ingest_result_json)
+        bar.addWidget(self.auto_verify_tab_btn)
 
         # Two buttons matching Image 2
-        import_items_file_btn = QPushButton("📥 导入回复文件")
-        import_items_file_btn.setObjectName("Pill")
-        import_items_file_btn.setStyleSheet(
+        self.import_items_file_btn = QPushButton("📥 导入回复文件")
+        self.import_items_file_btn.setObjectName("Pill")
+        self.import_items_file_btn.setStyleSheet(
             "QPushButton {"
             " background: #e0f2fe; color: #0369a1; border: 1px solid #bae6fd;"
             " border-radius: 4px; padding: 5px 12px; font-weight: bold;"
             "}"
             "QPushButton:hover { background: #bae6fd; }"
         )
-        import_items_file_btn.clicked.connect(self._import_items_file)
-        bar.addWidget(import_items_file_btn)
+        self.import_items_file_btn.clicked.connect(self._import_items_file)
+        bar.addWidget(self.import_items_file_btn)
 
-        paste_items_reply_btn = QPushButton("📝 粘贴回复文本")
-        paste_items_reply_btn.setObjectName("Ghost")
-        paste_items_reply_btn.setStyleSheet(
+        self.paste_items_reply_btn = QPushButton("📝 粘贴回复文本")
+        self.paste_items_reply_btn.setObjectName("Ghost")
+        self.paste_items_reply_btn.setStyleSheet(
             "QPushButton {"
             " background: #f8fafc; color: #2563eb; border: 1px solid #bfdbfe;"
             " border-radius: 4px; padding: 5px 12px; font-weight: bold;"
             "}"
             "QPushButton:hover { background: #eff6ff; }"
         )
-        paste_items_reply_btn.clicked.connect(self._paste_items_reply)
-        bar.addWidget(paste_items_reply_btn)
+        self.paste_items_reply_btn.clicked.connect(self._paste_items_reply)
+        bar.addWidget(self.paste_items_reply_btn)
 
         layout.addLayout(bar)
 
@@ -779,6 +779,7 @@ class AgentTaskDialog(QDialog):
 
         self.meta_label.setText(f"年份: {year} | 期刊: {journal} | 作者: {authors} | 知识卡: {len(cards)} 张 (数据表卡: {len(data_cards)} 张)")
         self.status_badge.setText(parse_status)
+        self._update_verification_buttons_state(parse_status == "LLM_EXTRACTED")
 
         # Refresh items
         self._populate_items()
@@ -788,6 +789,59 @@ class AgentTaskDialog(QDialog):
         self._populate_files()
 
         self.bottom_status.setText(f"已就绪 | 任务包: {self.task_dir.name} | 已入库 {len(cards)} 张知识卡片")
+
+    def _update_verification_buttons_state(self, is_extracted: bool) -> None:
+        """Update buttons state according to whether the task result is verified & ingested."""
+        if is_extracted:
+            green_style = (
+                "QPushButton {"
+                " background-color: #16a34a; color: #ffffff; border: 1px solid #15803d;"
+                " border-radius: 4px; padding: 5px 14px; font-weight: bold;"
+                "}"
+                "QPushButton:disabled {"
+                " background-color: #16a34a; color: #ffffff; border: 1px solid #15803d;"
+                "}"
+            )
+            if hasattr(self, "verify_btn"):
+                self.verify_btn.setText("✅ 已验收通过")
+                self.verify_btn.setStyleSheet(green_style)
+                self.verify_btn.setEnabled(False)
+                self.verify_btn.setToolTip("该文献任务已通过严格验收并成功入库。若需重新提取，可点击上方「🔄 重新生成」。")
+            if hasattr(self, "auto_verify_tab_btn"):
+                self.auto_verify_tab_btn.setText("✅ 已验收通过")
+                self.auto_verify_tab_btn.setStyleSheet(green_style)
+                self.auto_verify_tab_btn.setEnabled(False)
+                self.auto_verify_tab_btn.setToolTip("该文献任务已通过严格验收并成功入库。若需重新提取，可点击上方「🔄 重新生成」。")
+            if hasattr(self, "import_items_file_btn"):
+                self.import_items_file_btn.setEnabled(False)
+                self.import_items_file_btn.setToolTip("当前文献已验收通过。")
+            if hasattr(self, "paste_items_reply_btn"):
+                self.paste_items_reply_btn.setEnabled(False)
+                self.paste_items_reply_btn.setToolTip("当前文献已验收通过。")
+        else:
+            blue_btn_style = (
+                "QPushButton {"
+                " background: #0284c7; color: #ffffff; border: 1px solid #0369a1;"
+                " border-radius: 4px; padding: 5px 14px; font-weight: bold;"
+                "}"
+                "QPushButton:hover { background: #0369a1; }"
+            )
+            if hasattr(self, "verify_btn"):
+                self.verify_btn.setText("⚡ 检测并一键验收 result.json")
+                self.verify_btn.setStyleSheet(blue_btn_style)
+                self.verify_btn.setEnabled(True)
+                self.verify_btn.setToolTip("自动检测当前目录下是否存在 result.json，进行格式与完整性严格校验。通过则直接入库，存在问题则打回并生成重做提示词。")
+            if hasattr(self, "auto_verify_tab_btn"):
+                self.auto_verify_tab_btn.setText("⚡ 自动验收 result.json")
+                self.auto_verify_tab_btn.setStyleSheet(blue_btn_style)
+                self.auto_verify_tab_btn.setEnabled(True)
+                self.auto_verify_tab_btn.setToolTip("自动识别目录下是否有 result.json，尝试解析校验，成功则通过入库，存在问题则打回并生成重做提示词。")
+            if hasattr(self, "import_items_file_btn"):
+                self.import_items_file_btn.setEnabled(True)
+                self.import_items_file_btn.setToolTip("")
+            if hasattr(self, "paste_items_reply_btn"):
+                self.paste_items_reply_btn.setEnabled(True)
+                self.paste_items_reply_btn.setToolTip("")
 
     def _populate_items(self) -> None:
         items_file = self.task_dir / "items.json"
@@ -1029,12 +1083,18 @@ class AgentTaskDialog(QDialog):
             dlg = AgentRejectionDialog(self.doc_id, self.task_dir, report, parent=self)
             if dlg.exec() == QDialog.Accepted and getattr(dlg, "force_ingest_requested", False):
                 try:
-                    res = self.packager.submit_task_result(
+                    from ui.progress_dialog import run_task_with_progress
+
+                    res = run_task_with_progress(
+                        self,
+                        self.packager.submit_task_result,
                         self.doc_id,
                         result_file,
                         agent_name="agent_workbench",
                         agent_model=self.current_agent_model,
                         complete=False,
+                        title="💾 正在强制部分入库",
+                        message="正在将部分有效条目写入知识库与向量索引...",
                     )
                     QMessageBox.information(
                         self,
@@ -1053,12 +1113,18 @@ class AgentTaskDialog(QDialog):
 
         # Verification passed! Ingest into database
         try:
-            res = self.packager.submit_task_result(
+            from ui.progress_dialog import run_task_with_progress
+
+            res = run_task_with_progress(
+                self,
+                self.packager.submit_task_result,
                 self.doc_id,
                 result_file,
                 agent_name="agent_workbench",
                 agent_model=self.current_agent_model,
                 complete=True,
+                title="💾 正在验收并写入数据库",
+                message="正在将 Agent 提炼结果写入知识库与向量索引...",
             )
             cards = res.get("stored_cards", 0)
             kws = res.get("stored_keywords", 0)
@@ -1114,11 +1180,17 @@ class AgentTaskDialog(QDialog):
 
     def _submit_items(self, source: str | Path, agent_model: str) -> None:
         try:
-            res = self.packager.submit_task_result(
+            from ui.progress_dialog import run_task_with_progress
+
+            res = run_task_with_progress(
+                self,
+                self.packager.submit_task_result,
                 self.doc_id,
                 source,
                 agent_name="agent_workbench",
                 agent_model=agent_model,
+                title="💾 正在导入条目并写入数据库",
+                message="正在解析条目回复并生成知识卡片与向量索引...",
             )
             QMessageBox.information(
                 self,
@@ -1164,11 +1236,17 @@ class AgentTaskDialog(QDialog):
 
     def _submit_tables(self, source: str | Path, agent_model: str) -> None:
         try:
-            res = self.packager.submit_table_summary_result(
+            from ui.progress_dialog import run_task_with_progress
+
+            res = run_task_with_progress(
+                self,
+                self.packager.submit_table_summary_result,
                 self.doc_id,
                 source,
                 agent_name="agent_workbench",
                 agent_model=agent_model,
+                title="📊 正在导入表格总结并写入数据库",
+                message="正在为数据表格生成数据类型知识卡 (DATA)...",
             )
             QMessageBox.information(
                 self,

@@ -320,12 +320,32 @@ workspace/agent_tasks/<DOC-ID>/
 - 修复在 `DocumentDetailDialog` 中关闭 Agent 任务工作台后调用不存在的 `_refresh_pipeline_stepper` 导致的 `AttributeError`（统一修正为调用现有的 `self._refresh_stepper()` 与 `self._refresh_related_cards()`）。
 - 详情页“⑤ AI 深度归纳”策略下拉框同步补齐 `💻 本地 Agent / CLI 模式` 选项。
 
+### 9.7 任务验收通过后按键状态联动与界面保护机制
+- **状态感知与按键联动**：
+  - 在 `AgentTaskDialog` 中，当文献处于 `LLM_EXTRACTED` 状态，或用户点击验收按键成功通过严格核验并完成入库后：
+    - **`⚡ 检测并一键验收 result.json`**（顶栏 Row 3）与 **`⚡ 自动验收 result.json`**（Tab 1 底部）：按键背景色自动切换为绿色（`#16a34a`），文本更新为 **`✅ 已验收通过`**，并设置为不可再次点击（`setEnabled(False)`），附带明确的通过说明气泡提示；
+    - **`📥 导入回复文件`** 与 **`📝 粘贴回复文本`**：自动变为浅灰禁用状态（`setEnabled(False)`），防止在已提取完成的文献上发生误触覆盖写入；
+  - 若用户在顶栏点击“🔄 重新生成”，文献重置回初始状态，按键自动恢复为蓝色可用状态。
+
+### 9.8 网页 AI 模式与 CLI 模式全异步防假死数据库写入进度条 (`AsyncProgressDialog`)
+- **根除假死冻结体验**：此前在网页版手动提炼 (`SemiAutoBatchDialog`) 与本地 Agent 工作台 (`AgentTaskDialog`) 中，当写入大量知识卡片或同步更新向量数据库索引时，主界面会发生瞬间停顿与假死卡住感。
+- **现代异步进度弹窗 (`app_core/ui/progress_dialog.py`)**：
+  - 封装基于 `QThread` 的专用后台任务工作器 `TaskWorker` 与模态对话框 `AsyncProgressDialog`；
+  - 采用现代柔和圆角卡片、平滑渐变进度条（`#0284c7` 至 `#38bdf8`）与居中图标；
+  - 支持双模式动态反馈：默认跑马灯动画防假死，当存在明确条目数或表格数时自动转为步进进度（如 `正在写入数据库... (5/17)` 并显示实时处理的具体条目编号）；
+  - 全面包裹：
+    1. 网页 AI 提炼批量写入 (`finalize_run`)；
+    2. Agent 任务结果一键验收入库与强制部分入库 (`_verify_and_ingest_result_json`)；
+    3. Agent 条目文件/文本导入写入 (`_submit_items`)；
+    4. 数据表格总结文件/文本导入写入 (`_submit_tables`)；
+  - 在保持界面丝滑流畅交互的同时，确保多线程下 SQLite / Qdrant 写入的线程安全与异常安全捕获。
+
 ---
 
 ## 10. 自动化测试与全量验收
 
-- **测试用例总数**：由原 249 项扩展为 **256 项**；
-- **全量回归状态**：`pytest tests/` 256 项测试 100% 全部通过（0 失败，0 错误）；
+- **测试用例总数**：由原 249 项扩展为 **257 项**；
+- **全量回归状态**：`pytest tests/` 257 项测试 100% 全部通过（0 失败，0 错误）；
 - **新增 Agent 专项测试 (`tests/test_v310.py`)**：
   1. `test_agent_task_packager_export_and_submit`：端到端验证任务目录导出完整性、状态检查、结果提交（L2 卡片入库、关键词解析、文献状态跃迁）；
   2. `test_agent_workbench_and_cli_dispatch`：验证命令行解析器对 `agent export/submit/status/execute` 子命令的分发、`--base` 与 `--workspace` 参数穿透以及 Headless 独立服务安全退出；
@@ -333,6 +353,7 @@ workspace/agent_tasks/<DOC-ID>/
   4. `test_table_summary_prompt_and_submission`：测试数据表格总结 Prompt 生成、表格回复导入解析、生成 `DATA` 知识卡并存入数据库；
   5. `test_agent_task_dialog_ui`：测试 `AgentTaskDialog` 图形工作台三标签页初始化、路径与命令行展示，以及 `DocumentDetailDialog` 中 `fast_mode_combo` 的 3 个执行策略选项；
   6. `test_validate_task_result_pass_and_reject`：测试 `validate_task_result` 针对未检测到文件、空文件、JSON 语法错误、条目缺失、Schema 格式错误以及 100% 通过等各种边界情况的精准拦截与通过机制；
-  7. `test_agent_rejection_dialog_and_gui_flow`：测试打回对话框 `AgentRejectionDialog` 渲染、打回提示词复制、自动验收按键触发与文献状态跃迁。
+  7. `test_agent_rejection_dialog_and_gui_flow`：测试打回对话框 `AgentRejectionDialog` 渲染、打回提示词复制、自动验收按键触发与文献状态跃迁；
+  8. `test_agent_task_dialog_auto_verify` & `test_async_progress_dialog`：测试一键自动验收、验收通过后按钮变绿变为已验收通过、导入回复按键禁用以及 `AsyncProgressDialog` 异步写入进度条驱动逻辑。
 - **实例文献验证**：以典型超长数据表文献 `DOC-PAP-0000-E284F0` 实测，成功导出自解释任务包目录、175 个条目、21 个浓缩数据表格，并成功生成 15,045 字符的表格总结专用 Prompt。
 

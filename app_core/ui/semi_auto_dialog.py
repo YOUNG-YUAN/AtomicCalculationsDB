@@ -903,20 +903,23 @@ class SemiAutoBatchDialog(QDialog):
             )
             if answer != QMessageBox.Yes:
                 return
-        QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
-            result = finalize_run(
+            from ui.progress_dialog import run_task_with_progress
+
+            result = run_task_with_progress(
+                self,
+                finalize_run,
                 self.pipeline,
                 self.db,
                 self.workspace,
                 self.manifest,
                 agent_model=self.current_agent_model,
+                title="🚀 正在写入知识库",
+                message="正在将网页 AI 提炼结果写入知识库与向量索引...",
             )
         except Exception as exc:
             QMessageBox.warning(self, "写入失败", str(exc))
-            QApplication.restoreOverrideCursor()
             return
-        QApplication.restoreOverrideCursor()
         self.changed.emit()
         self._render()
         if result.get("already_finalized"):

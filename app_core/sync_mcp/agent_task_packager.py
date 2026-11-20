@@ -612,6 +612,7 @@ class AgentTaskPackager:
         agent_name: str = "agent",
         agent_model: str = "",
         complete: bool | None = None,
+        progress_callback: Callable[[int, int, str], None] | None = None,
     ) -> dict[str, Any]:
         """Validate and ingest an agent-generated result.json into the knowledge database."""
         doc_key = str(doc_id or "").strip()
@@ -699,10 +700,15 @@ class AgentTaskPackager:
         skipped_items = 0
         valid_items_count = 0
 
+        total_entries = len([e for e in entries if isinstance(e, Mapping)])
+        current_idx = 0
         for entry in entries:
             if not isinstance(entry, Mapping):
                 continue
+            current_idx += 1
             item_id = str(entry.get("item_id") or "").strip()
+            if progress_callback:
+                progress_callback(current_idx, total_entries, f"正在入库条目 {item_id or current_idx} ({current_idx}/{total_entries})...")
             result_payload = entry.get("result", entry)
             if not isinstance(result_payload, Mapping):
                 continue
@@ -871,6 +877,7 @@ class AgentTaskPackager:
         *,
         agent_name: str = "agent",
         agent_model: str = "",
+        progress_callback: Callable[[int, int, str], None] | None = None,
     ) -> dict[str, Any]:
         """Validate and ingest table summary replies into the knowledge database as DATA cards."""
         doc_key = str(doc_id or "").strip()
@@ -940,11 +947,16 @@ class AgentTaskPackager:
 
         stored_cards = 0
         card_ids = []
+        total_tables = len([e for e in tables_list if isinstance(e, Mapping)])
+        current_idx = 0
         for entry in tables_list:
             if not isinstance(entry, Mapping):
                 continue
+            current_idx += 1
             item = dict(entry)
             table_key = str(item.get("table_key") or item.get("table_id") or item.get("table_num") or "1").strip()
+            if progress_callback:
+                progress_callback(current_idx, total_tables, f"正在入库表格 Table {table_key} 总结 ({current_idx}/{total_tables})...")
             raw_title = str(item.get("title_zh") or item.get("title") or f"Table {table_key} 数据总结").strip()
             title_zh = raw_title if ("表" in raw_title or "Table" in raw_title) else f"【数据表】Table {table_key}: {raw_title}"
             title_en = str(item.get("title_en") or f"Table {table_key} Data Summary").strip()

@@ -14,7 +14,7 @@ import json
 import shutil
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping
 
 from models.atomic_prompts import (
     CARD_SYSTEM_PROMPT,
@@ -764,6 +764,7 @@ def finalize_run(
     *,
     agent_name: str = "",
     agent_model: str = "",
+    progress_callback: Callable[[int, int, str], None] | None = None,
 ) -> dict[str, Any]:
     """Delete old unverified cards (force mode), then write all imported replies atomically."""
     if str(manifest.get("status") or "").upper() == "FINALIZED":
@@ -779,6 +780,11 @@ def finalize_run(
     with_cards: set[str] = set()
     deleted_qdrant_ids: list[str] = []
     verified_events: list[tuple[str, int]] = []
+
+    batches = manifest.get("batches") or []
+    total_items = sum(len(parsed.get(str(b["batch_id"]), {}).get("items") or []) for b in batches)
+    current_item = 0
+
     tx_factory = getattr(db, "transaction", None)
     tx_ctx = tx_factory() if callable(tx_factory) else contextlib.nullcontext()
     with tx_ctx:
@@ -792,7 +798,7 @@ def finalize_run(
                 )
                 if removed.get("kept_verified"):
                     verified_events.append((doc_id, len(removed["kept_verified"])))
-        for batch in manifest.get("batches") or []:
+        for batch in batches:
             payload = parsed.get(str(batch["batch_id"]))
             if not payload:
                 continue
@@ -803,7 +809,10 @@ def finalize_run(
             )
             results = payload["results"]
             for item in payload["items"]:
+                current_item += 1
                 item_id = str(item.get("item_id") or "")
+                if progress_callback:
+                    progress_callback(current_item, total_items, f"正在入库条目 {item_id} ({current_item}/{total_items})...")
                 result = results.get(item_id)
                 if result is None:
                     continue
