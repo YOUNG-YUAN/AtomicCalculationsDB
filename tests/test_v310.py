@@ -17,6 +17,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QAbstractItemView, QApplication, QDialog
 
 from db.sqlite_manager import SQLiteManager
+from parser.context_bundler import ContextBundle
 from parser.metadata_extractor import (
     bibtex_to_metadata,
     parse_bibtex_file,
@@ -755,6 +756,162 @@ def test_rate_limit_detection_and_execute_resilience(tmp_path):
     instr = (task_dir / "task_instructions.md").read_text(encoding="utf-8")
     assert "限额、超时与断点续传弹性规则" in instr
     assert "绝对禁止因限额或超时中断任务" in instr
+
+
+def test_table_summary_prompt_and_submission(tmp_path):
+    """Test generating table summary prompt and ingesting table summary into DATA cards."""
+    from sync_mcp.agent_task_packager import AgentTaskPackager
+    from models.atomic_prompts import KnowledgeCardDraft
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    db = SQLiteManager(workspace / "test.db")
+    doc_id = "DOC-PAP-2024-A00001"
+
+    storage_dir = workspace / "storage" / doc_id
+    storage_dir.mkdir(parents=True)
+    pdf_file = storage_dir / "paper.pdf"
+    pdf_file.write_bytes(b"%PDF-1.4 test")
+    (storage_dir / "parsed.md").write_text("# Paper Title\nTable 1\n", encoding="utf-8")
+
+    parsed_tables = [
+        {
+            "caption": "Table 1: Measured and calculated energy levels of Fe XVII",
+            "markdown": "| Level | Config | Energy (cm-1) |\n|---|---|---|\n| 1 | 2p6 | 0.0 |\n| 2 | 2p5 3s | 580000 |\n",
+        }
+    ]
+    (storage_dir / "parsed_tables.json").write_text(json.dumps(parsed_tables), encoding="utf-8")
+
+    bundle = ContextBundle(doc_id=doc_id, section_path="Results", focal_sentence="See Table 1.")
+    (storage_dir / "bundles.json").write_text(json.dumps([bundle.model_dump(mode="json")]), encoding="utf-8")
+
+    db.upsert_document({
+        "doc_id": doc_id,
+        "title": "Fe XVII Spectrum Paper",
+        "doc_type": "PAP",
+        "pub_year": 2024,
+        "local_pdf_path": str(pdf_file.relative_to(workspace)),
+        "parse_status": "LIGHT_PARSED",
+    })
+
+    pipeline = MagicMock()
+    stored_cards_list = []
+
+    def mock_store_draft(draft, doc, bundle, keywords, **kwargs):
+        card_id = f"KNW-{draft.card_type}-2024-T00001"
+        stored_cards_list.append({"card_id": card_id, "draft": draft})
+        return card_id
+
+    pipeline._store_draft.side_effect = mock_store_draft
+    packager = AgentTaskPackager(db, workspace, pipeline=pipeline)
+
+    # 1. Build prompt
+    prompt = packager.build_table_summary_prompt(doc_id)
+    assert "数据表格物理总结任务" in prompt
+    assert "Table 1" in prompt
+    assert "Fe XVII" in prompt
+    assert "DATA Card" in prompt
+
+    # 2. Submit table summary response
+    reply_payload = {
+        "tables": [
+            {
+                "table_key": "1",
+                "title_zh": "Table 1: Fe XVII 能级数据总结",
+                "summary_zh": "包含Fe XVII基态与激发态能级，MCDHF计算结果与NIST实验值偏差小于0.2%",
+                "premises_and_conditions": "采用MCDHF和RCI方法，包含 Breit 相互作用与 QED 修正",
+                "element": "Fe",
+                "z_num": 26,
+                "ion_stage": "Fe XVII",
+                "isoelectronic": "Ne-like",
+                "method": "MCDHF",
+                "physical_process": "能级结构",
+                "columns_summary": "列1: 能级编号; 列2: 电子组态; 列3: 能级值 (cm-1)",
+                "key_parameters": ["580000 cm-1"],
+                "keywords": ["Fe XVII", "MCDHF", "能级结构"],
+            }
+        ]
+    }
+
+    res = packager.submit_table_summary_result(
+        doc_id,
+        reply_payload,
+        agent_name="TestTableAgent",
+        agent_model="TestModel-1",
+    )
+    assert res["ok"] is True
+    assert res["tables_processed"] == 1
+    assert res["stored_cards"] == 1
+
+    assert len(stored_cards_list) == 1
+    card_info = stored_cards_list[0]
+    draft = card_info["draft"]
+    assert draft.card_type == "CONC"
+    assert "Fe XVII" in draft.title_zh
+    assert draft.structured_details["category"] == "DATA"
+    assert draft.structured_details["data_type"] == "TABLE_SUMMARY"
+    assert draft.structured_details["table_key"] == "1"
+    assert draft.element == "Fe"
+    assert draft.z_num == 26
+
+
+def test_agent_task_dialog_ui(tmp_path, qapp):
+    """Test AgentTaskDialog GUI initialization, tab population, and fast_mode_combo."""
+    from ui.agent_task_dialog import AgentTaskDialog
+    from ui.dialogs import DocumentDetailDialog
+
+    workspace = tmp_path / "ws_ui"
+    workspace.mkdir()
+    db = SQLiteManager(workspace / "test.db")
+    doc_id = "DOC-PAP-2024-B00001"
+
+    storage_dir = workspace / "storage" / doc_id
+    storage_dir.mkdir(parents=True)
+    pdf_file = storage_dir / "paper.pdf"
+    pdf_file.write_bytes(b"%PDF-1.4 test")
+    (storage_dir / "parsed.md").write_text("# Test Article\n", encoding="utf-8")
+    (storage_dir / "parsed_tables.json").write_text("[]", encoding="utf-8")
+    (storage_dir / "bundles.json").write_text("[]", encoding="utf-8")
+
+    db.upsert_document({
+        "doc_id": doc_id,
+        "title": "UI Test Document",
+        "doc_type": "PAP",
+        "pub_year": 2024,
+        "local_pdf_path": str(pdf_file.relative_to(workspace)),
+        "parse_status": "LIGHT_PARSED",
+    })
+
+    pipeline = MagicMock()
+    pipeline.config = {}
+
+    dialog = AgentTaskDialog(
+        db=db,
+        workspace=workspace,
+        pipeline=pipeline,
+        doc_id=doc_id,
+    )
+    assert dialog.windowTitle().startswith("💻 本地 Agent / CLI 任务工作台")
+    assert dialog.tabs.count() == 3
+    assert "items.json" in dialog.tabs.tabText(0)
+    assert "tables/" in dialog.tabs.tabText(1)
+    assert "任务包原始文件" in dialog.tabs.tabText(2)
+    assert dialog.path_edit.text() != ""
+    assert "agent execute" in dialog.cli_edit.text()
+
+    # Verify DocumentDetailDialog has "agent" option in fast_mode_combo
+    detail_dlg = DocumentDetailDialog(
+        db=db,
+        workspace=workspace,
+        pipeline=pipeline,
+        doc_id=doc_id,
+    )
+    combo = detail_dlg.fast_mode_combo
+    assert combo.count() == 3
+    assert combo.itemData(0) == "auto"
+    assert combo.itemData(1) == "manual"
+    assert combo.itemData(2) == "agent"
+    assert "Agent" in combo.itemText(2)
+
 
 
 

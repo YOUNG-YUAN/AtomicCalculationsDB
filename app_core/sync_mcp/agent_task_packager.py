@@ -91,8 +91,8 @@ class AgentTaskPackager:
         bundles_path = storage_dir / "bundles.json"
         parsed_md_path = storage_dir / "parsed.md"
 
-        # If document not parsed yet or forced, run parse_document
-        if force or not bundles_path.is_file() or not parsed_md_path.is_file():
+        # If document not parsed yet, run parse_document if pipeline is available
+        if not bundles_path.is_file() or not parsed_md_path.is_file():
             if self.pipeline is not None:
                 log.info("Document %s requires parsing before agent task export", doc_key)
                 self.pipeline.parse_document(doc_key)
@@ -454,6 +454,224 @@ class AgentTaskPackager:
             "skipped_items": skipped_items,
             "is_complete": is_complete,
             "status": new_status,
+        }
+
+    def build_table_summary_prompt(self, doc_id: str) -> str:
+        """Construct a structured table summary prompt for AI agents or web models to generate DATA cards."""
+        doc_key = str(doc_id or "").strip()
+        doc = self.db.get_document(doc_key)
+        if not doc:
+            raise ValueError(f"找不到文献：{doc_key}")
+
+        task_dir = self.workspace / "agent_tasks" / doc_key
+        tables_dir = task_dir / "tables"
+        if not tables_dir.is_dir() or not any(tables_dir.glob("*.md")):
+            # Export bundle if missing
+            self.export_task_bundle(doc_key)
+
+        table_files = sorted(tables_dir.glob("*.md")) if tables_dir.is_dir() else []
+        table_snippets = []
+        for tf in table_files:
+            try:
+                content = tf.read_text(encoding="utf-8").strip()
+                table_snippets.append(f"### 文件名: tables/{tf.name}\n```markdown\n{content}\n```\n")
+            except Exception:
+                continue
+
+        tables_block = "\n".join(table_snippets) if table_snippets else "（该文献未检测到独立数据表格文件）"
+
+        prompt = (
+            f"# 数据表格物理总结任务 (Table Summary Task)\n\n"
+            f"## 文献信息\n"
+            f"- 文献编号: {doc_key}\n"
+            f"- 论文标题: {doc.get('title') or '—'}\n"
+            f"- 出版年份: {doc.get('pub_year') or '—'}\n"
+            f"- 涉及期刊: {doc.get('journal') or '—'}\n\n"
+            f"## 任务目标\n"
+            f"请对文献中包含的以下 {len(table_files)} 个数据表格进行物理提炼与结构化总结。"
+            f"表格是原子物理计算与实验数据的核心载体，请根据表头、表格列标签以及大致内容，"
+            f"为每个表格写出一个概括总结，作为【数据类型知识卡 (DATA Card)】直接入库。\n\n"
+            f"## 表格内容清单\n"
+            f"{tables_block}\n\n"
+            f"## 输出要求\n"
+            f"请输出严格合法的 JSON 对象，不要附加任何其他开场白或解释性文字。JSON 结构如下：\n"
+            f"```json\n"
+            f"{{\n"
+            f'  "tables": [\n'
+            f"    {{\n"
+            f'      "table_key": "1",\n'
+            f'      "title_zh": "Table 1: [物理量名称/核心主题] 数据总结",\n'
+            f'      "title_en": "Table 1: [Topic] Data Summary",\n'
+            f'      "summary_zh": "【数据概貌】：包含...个能级/跃迁/截面数据。\\n【核心结果】：对比了...，最大差异为...，主要数值趋势为...\\n【物理结论】：...",\n'
+            f'      "premises_and_conditions": "计算方法（如MCDHF/FAC/R-matrix）、关联参数、基组或实验测量环境与不确定度...",\n'
+            f'      "element": "元素符号 (如 Fe, W，若无留空)",\n'
+            f'      "z_num": 26,\n'
+            f'      "ion_stage": "电离态 (如 Fe XVII, 若无留空)",\n'
+            f'      "isoelectronic": "等电子序列 (如 Ne-like, 若无留空)",\n'
+            f'      "method": "计算方法/代码名称 (如 FAC, GRASP2018, 若无留空)",\n'
+            f'      "physical_process": "物理过程 (如 电子碰撞激发, 辐射衰变, 若无留空)",\n'
+            f'      "columns_summary": "表头列结构说明 (例如: 列1: 跃迁标识; 列2: 波长/Å; 列3: 振子强度gf; 列4: 跃迁几率A/s-1)",\n'
+            f'      "key_parameters": ["提取的代表性参数名或关键数据点"],\n'
+            f'      "keywords": ["关键词1", "关键词2"]\n'
+            f"    }}\n"
+            f"  ]\n"
+            f"}}\n"
+            f"```\n"
+        )
+        return prompt
+
+    def submit_table_summary_result(
+        self,
+        doc_id: str,
+        result_path_or_text: str | Path | Mapping[str, Any] | list[Any],
+        *,
+        agent_name: str = "agent",
+        agent_model: str = "",
+    ) -> dict[str, Any]:
+        """Validate and ingest table summary replies into the knowledge database as DATA cards."""
+        doc_key = str(doc_id or "").strip()
+        doc = self.db.get_document(doc_key)
+        if not doc:
+            raise ValueError(f"找不到文献：{doc_key}")
+
+        if self.pipeline is None:
+            raise RuntimeError("Pipeline 未初始化，无法写入知识库")
+
+        # Parse input into JSON object/list
+        if isinstance(result_path_or_text, (Mapping, list)):
+            payload = result_path_or_text
+        else:
+            raw_str = str(result_path_or_text).strip()
+            file_candidate = Path(raw_str)
+            if file_candidate.is_file():
+                raw_text = file_candidate.read_text(encoding="utf-8")
+            else:
+                raw_text = raw_str
+
+            # Strip markdown fences if present
+            raw_text = raw_text.strip()
+            if "```" in raw_text:
+                m = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", raw_text)
+                if m:
+                    raw_text = m.group(1).strip()
+            payload = json.loads(raw_text)
+
+        # Normalize tables list
+        if isinstance(payload, list):
+            tables_list = payload
+        elif isinstance(payload, dict):
+            if "tables" in payload and isinstance(payload["tables"], list):
+                tables_list = payload["tables"]
+            elif "items" in payload and isinstance(payload["items"], list):
+                tables_list = payload["items"]
+            elif "cards" in payload and isinstance(payload["cards"], list):
+                tables_list = payload["cards"]
+            else:
+                tables_list = [payload]
+        else:
+            raise ValueError("无法解析表格回复内容为合法的数据表列表")
+
+        from models.atomic_prompts import KnowledgeCardDraft
+        from parser.context_bundler import ContextBundle
+
+        provenance_override = {
+            "fast_llm": {
+                "node_id": f"agent-{agent_name.lower()}",
+                "name": agent_name or "CLI_AGENT",
+                "node_type": "CLI_AGENT",
+                "provider": "agent_cli",
+                "model": agent_model or "TableSummaryAgent",
+            }
+        }
+
+        stored_cards = 0
+        card_ids = []
+        for entry in tables_list:
+            if not isinstance(entry, Mapping):
+                continue
+            item = dict(entry)
+            table_key = str(item.get("table_key") or item.get("table_id") or item.get("table_num") or "1").strip()
+            raw_title = str(item.get("title_zh") or item.get("title") or f"Table {table_key} 数据总结").strip()
+            title_zh = raw_title if ("表" in raw_title or "Table" in raw_title) else f"【数据表】Table {table_key}: {raw_title}"
+            title_en = str(item.get("title_en") or f"Table {table_key} Data Summary").strip()
+            summary_zh = str(item.get("summary_zh") or item.get("summary") or "").strip()
+            if not summary_zh:
+                summary_zh = f"文献 {doc_key} 数据表格 Table {table_key} 的物理参数汇总。"
+
+            premises = str(item.get("premises_and_conditions") or item.get("conditions") or "源自文献数据表格概括与总结").strip()
+            element = str(item.get("element") or "").strip() or None
+            raw_z = item.get("z_num")
+            z_num = int(raw_z) if raw_z and str(raw_z).isdigit() else None
+            ion_stage = str(item.get("ion_stage") or "").strip() or None
+            isoelectronic = str(item.get("isoelectronic") or "").strip() or None
+            method = str(item.get("method") or "").strip() or None
+            physical_process = str(item.get("physical_process") or "").strip() or None
+            columns_summary = item.get("columns_summary")
+            key_parameters = item.get("key_parameters") or []
+            keywords = item.get("keywords") or []
+
+            structured_details = {
+                "category": "DATA",
+                "card_type": "DATA",
+                "data_type": "TABLE_SUMMARY",
+                "table_key": table_key,
+                "columns_summary": columns_summary,
+                "key_parameters": key_parameters,
+                "extractor_model": agent_model or "CLI_AGENT",
+            }
+
+            draft = KnowledgeCardDraft(
+                card_type="CONC",
+                title_zh=title_zh,
+                title_en=title_en,
+                summary_zh=summary_zh,
+                premises_and_conditions=premises,
+                element=element,
+                z_num=z_num,
+                ion_stage=ion_stage,
+                isoelectronic=isoelectronic,
+                method=method,
+                physical_process=physical_process,
+                structured_details=structured_details,
+                keywords=[str(k) for k in keywords] if isinstance(keywords, list) else [],
+            )
+
+            bundle = ContextBundle(
+                doc_id=doc_key,
+                section_path=f"Table {table_key}",
+                focal_sentence=f"数据表格 Table {table_key} 概括总结与参数提取",
+            )
+
+            try:
+                card_id = self.pipeline._store_draft(
+                    draft,
+                    doc,
+                    bundle,
+                    draft.keywords,
+                    provenance_override=provenance_override,
+                    provenance_source="agent_cli",
+                )
+            except TypeError:
+                card_id = self.pipeline._store_draft(
+                    draft, doc, bundle, draft.keywords
+                )
+            if card_id:
+                stored_cards += 1
+                card_ids.append(card_id)
+
+        self.db.log_event(
+            "INFO",
+            "agent_table_summary",
+            f"{doc_key} 数据表格总结入库：共生成 {stored_cards} 张数据类型知识卡 (DATA Cards)",
+            doc_id=doc_key,
+        )
+
+        return {
+            "ok": True,
+            "doc_id": doc_key,
+            "tables_processed": len(tables_list),
+            "stored_cards": stored_cards,
+            "card_ids": card_ids,
         }
 
     def get_task_status(self, doc_id: str) -> dict[str, Any]:

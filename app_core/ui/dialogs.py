@@ -1210,7 +1210,8 @@ class DocumentDetailDialog(QDialog):
         self.fast_mode_combo.setObjectName("Pill")
         self.fast_mode_combo.addItem("🤖 模型调度策略 (API 自动)", "auto")
         self.fast_mode_combo.addItem("📋 网页版 AI 手动 (零 Token)", "manual")
-        self.fast_mode_combo.setToolTip("选择第 ③ 步「AI 快速提取」执行方式：走大模型接口并发调用，或导出任务包由网页版大模型处理")
+        self.fast_mode_combo.addItem("💻 本地 Agent / CLI 任务包", "agent")
+        self.fast_mode_combo.setToolTip("选择第 ③ 步「AI 快速提取」执行方式：走大模型接口并发调用、导出任务包由网页版大模型处理，或导出给本地 AI Agent / CLI 处理")
         strat_layout.addWidget(lbl_fast)
         strat_layout.addWidget(self.fast_mode_combo)
 
@@ -1465,6 +1466,8 @@ class DocumentDetailDialog(QDialog):
             fast_mode = self.fast_mode_combo.currentData() if hasattr(self, "fast_mode_combo") else "auto"
             if fast_mode == "manual":
                 self._open_semi_auto()
+            elif fast_mode == "agent":
+                self._open_agent_workbench()
             else:
                 # 检查是否已配置 fast_llm API
                 config = getattr(self.pipeline, "config", None) or {}
@@ -1557,6 +1560,24 @@ class DocumentDetailDialog(QDialog):
         dialog.exec()
         self.doc = self.db.get_document(str(self.doc["doc_id"])) or self.doc
         self._refresh_related_cards()
+
+    def _open_agent_workbench(self) -> None:
+        if not self.doc:
+            return
+        from ui.agent_task_dialog import AgentTaskDialog
+
+        doc_id = str(self.doc["doc_id"])
+        dialog = AgentTaskDialog(
+            self,
+            db=self.db,
+            workspace=self.workspace,
+            pipeline=self.pipeline,
+            doc_id=doc_id,
+        )
+        dialog.exec()
+        self.doc = self.db.get_document(doc_id) or self.doc
+        self._refresh_related_cards()
+        self._refresh_pipeline_stepper()
 
     def _run_reprocess(self, mode: str) -> None:
         if self.reprocess_manager is None:

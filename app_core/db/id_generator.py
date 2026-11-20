@@ -44,6 +44,9 @@ _CARD_TYPE_ALIASES = {
     "PITFALL": "PITFALL",
     "CONC": "CONC",
     "CONCLUSION": "CONC",
+    "DATA": "CONC",
+    "TABLE": "CONC",
+    "TABLE_SUMMARY": "CONC",
     "MASTER": "MASTER",
 }
 

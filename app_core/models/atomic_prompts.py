@@ -99,6 +99,9 @@ _CARD_TYPE_ALIASES = {
     "CONC": "CONC",
     "CONCLUSION": "CONC",
     "RESULT": "CONC",
+    "DATA": "CONC",
+    "TABLE": "CONC",
+    "TABLE_SUMMARY": "CONC",
 }
 
 
@@ -109,6 +112,12 @@ class KnowledgeCardDraft(BaseModel):
     summary_zh: str
     premises_and_conditions: str
     conditions: CardConditions = Field(default_factory=CardConditions)
+
+    @field_validator("card_type", mode="before")
+    @classmethod
+    def _coerce_card_type(cls, value: Any) -> str:
+        s = str(value or "CONC").strip().upper()
+        return _CARD_TYPE_ALIASES.get(s, "CONC")
     element: str | None = None
     z_num: int | None = None
     ion_stage: str | None = None

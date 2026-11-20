@@ -36,6 +36,11 @@
 >    - **解耦自解释目录**：生成专属 `workspace/agent_tasks/<DOC-ID>/`，包含 `task_instructions.md`（带物理规则与防坑指南）、`items.json`（按需关联独立表格与图片）、`schema.json`（严格结果结构）、`parsed.md`（全文公式文本）以及 `tables/Table_X.md`；
 >    - **Agent CLI 交互引擎**：支持 `python -m app_core agent export <DOC-ID>` 导出目录、`status <DOC-ID>` 查询任务状态、`submit <DOC-ID> [result.json]` 校验并自动批量入库 L2 知识卡片、关键词并推进状态至 `LLM_EXTRACTED`；
 >    - **GUI 桥接与 MCP 工具联动**：GUI 运行时通过 HTTP 桥无冲突操作（避免 Qdrant/SQLite 锁），GUI 未启动时以 Headless 独立服务执行；同步在 `KnowledgeMCPServer` 中暴露对应 MCP 工具。
+> 7. **本地 Agent / CLI 专属图形工作台 (`AgentTaskDialog`)、执行策略专用选项与数据表格总结入库 (DATA Cards)**：
+>    - **专属执行策略**：在文献详情工作台“⚙️ 执行策略: ③ AI 快速提取”下拉框中新增第三项专属执行策略：`💻 本地 Agent / CLI 任务包`；
+>    - **本地 Agent 工作台 (`AgentTaskDialog`)**：点击第 ③ 步执行按键直接唤起全新的专属工作台，呈现任务包绝对目录（复制路径/打开文件夹/重新生成）、CLI 执行命令行、Agent 通用任务提示词与原始文件列表；
+>    - **条目与表格双重回复导入 (双按键)**：针对物理条目 (`items.json`) 与数据表格 (`tables/`) 分别提供 `📥 导入回复文件` 与 `📝 粘贴回复文本` 两个专属导入按键；
+>    - **数据表格总结直接入库为 DATA 卡片**：支持一键生成并复制表格总结专用 Prompt，AI 根据表头、列标签及大致数值输出的总结，自动解析并转换为规范的【数据类型知识卡 (DATA Cards)】直接入库。
 
 ---
 
@@ -237,12 +242,55 @@ workspace/agent_tasks/<DOC-ID>/
 
 ---
 
-## 9. 自动化测试与全量验收
+## 9. 本地 Agent / CLI 专属图形工作台与数据表格总结入库 (`app_core/ui/agent_task_dialog.py` & `app_core/sync_mcp/agent_task_packager.py`)
 
-- **测试用例总数**：由原 249 项扩展为 **252 项**；
-- **全量回归状态**：`pytest tests/` 252 项测试 100% 全部通过（0 失败，0 错误）；
+### 9.1 执行策略专属选项 (`fast_mode_combo`)
+在文献详情工作台顶部的“⚙️ 执行策略: ③ AI 快速提取”下拉列表中新增第三项专属执行策略：
+- `🤖 模型调度策略 (API 自动)`（`auto`）：直接调用后台大模型 API 并发提取；
+- `📋 网页版 AI 手动 (零 Token)`（`manual`）：打开半自动提问包提炼工作台；
+- `💻 本地 Agent / CLI 任务包`（`agent`）：针对本地 autonomous agents（如 Codex、Claude Code、Antigravity）提供完整自解释文件夹、条目审查、表格总结与双按键导入工作台。
+
+当选择 `💻 本地 Agent / CLI 任务包` 并点击“③ 从AI快速提取开始”按键时，无缝呼出 `AgentTaskDialog`。
+
+### 9.2 Agent 图形工作台三区架构 (`AgentTaskDialog`)
+1. **顶部控制面板 (Agent 任务包与工作路径)**：
+   - 任务包目录展示：显示绝对路径（`workspace/agent_tasks/<DOC-ID>/`），提供 `📋 复制路径`、`📁 打开文件夹`（调用系统 Explorer）与 `🔄 重新生成` 按钮；
+   - CLI 命令行：显示执行命令（`python -m app_core agent execute <DOC-ID>`），提供 `📋 复制命令`；
+   - 提示词指引：提供 `📋 复制完整 Agent 提示词`，将包含自解释规则、文件用途说明与 429 限额防中断暂停规范的 Prompt 一键复制到剪贴板。
+2. **三标签页内容管理与审查**：
+   - **Tab 1：📝 物理问题条目 (`items.json`)**：
+     - 清晰表格呈现所有条目的 ID、章节路径、对应页码、焦点陈述 (Focal Sentence) 及按需关联的数据表格与配图；
+     - 提供 `📋 复制全部条目 JSON` 与 `📋 复制选中条目 JSON`；
+     - 底部操作栏提供与网页 AI 一致的双导入按键：
+       - `📥 导入回复文件`：选择 Agent 或大模型输出的 JSON/文本文件并自动解析入库；
+       - `📝 粘贴回复文本`：弹出专用粘贴回复弹窗（`AgentPasteReplyDialog`），支持选择处理模型并贴入回复内容。
+   - **Tab 2：📊 数据表格与总结 (`tables/`)**：
+     - 左侧展示文献提取出的所有骨架数据表格列表（`Table_1.md`, `Table_2.md` ...）；
+     - 右侧实时预览选中表格的 Markdown 骨架结构；
+     - 提供 `📋 复制表格总结提示词`（调用 `build_table_summary_prompt` 自动汇编包含论文元数据、全部表格骨架与输出规范的 Prompt）；
+     - 提供 `📋 复制当前表格 Markdown`；
+     - 底部操作栏配备专属双导入按键：
+       - `📥 导入回复文件`：直接导入 AI 针对数据表格输出的 JSON 总结文件；
+       - `📝 粘贴回复文本`：直接粘贴 AI 总结回复文本。
+   - **Tab 3：📄 任务包原始文件**：
+     - 文件树浏览 `task_instructions.md`、`items.json`、`schema.json`、`parsed.md`、`tables/` 与 `images/`；
+     - 支持查看文件内容并一键复制内容或文件路径。
+3. **数据表格总结直接生成数据类型知识卡 (DATA Cards)**：
+   - AI 输出包含表格表头含义、物理量范围、目标离子/能级、数据规模与数值结论的总结；
+   - `AgentTaskPackager.submit_table_summary_result` 自动将回复解析为 `KnowledgeCardDraft`，标记 `category="DATA"`、`data_type="TABLE_SUMMARY"`；
+   - 在底座与模型校验中扩展 `_CARD_TYPE_ALIASES` 兼容 `"DATA"`，安全映射到 L2 数据库 `CONC` 数值结论类型并生成唯一 ID，关联文献全景脉络。
+
+---
+
+## 10. 自动化测试与全量验收
+
+- **测试用例总数**：由原 249 项扩展为 **254 项**；
+- **全量回归状态**：`pytest tests/` 254 项测试 100% 全部通过（0 失败，0 错误）；
 - **新增 Agent 专项测试 (`tests/test_v310.py`)**：
-  1. `test_agent_task_packager_export_and_submit`：端到端验证任务目录导出完整性（目录结构、文件存在性、骨架表引用）、状态检查、结果提交（L2 卡片入库、关键词解析、文献状态跃迁）；
+  1. `test_agent_task_packager_export_and_submit`：端到端验证任务目录导出完整性、状态检查、结果提交（L2 卡片入库、关键词解析、文献状态跃迁）；
   2. `test_agent_workbench_and_cli_dispatch`：验证命令行解析器对 `agent export/submit/status/execute` 子命令的分发、`--base` 与 `--workspace` 参数穿透以及 Headless 独立服务安全退出；
-  3. `test_rate_limit_detection_and_execute_resilience`：测试 429 / 限额 / 超时错误精准识别、执行器遇到限额自动挂起暂停、定时轮询探测解除后断点恢复与结果完整入库。
+  3. `test_rate_limit_detection_and_execute_resilience`：测试 429 / 限额 / 超时错误精准识别、执行器遇到限额自动挂起暂停、定时轮询探测解除后断点恢复与结果完整入库；
+  4. `test_table_summary_prompt_and_submission`：测试数据表格总结 Prompt 生成、表格回复导入解析、生成 `DATA` 知识卡并存入数据库；
+  5. `test_agent_task_dialog_ui`：测试 `AgentTaskDialog` 图形工作台三标签页初始化、路径与命令行展示，以及 `DocumentDetailDialog` 中 `fast_mode_combo` 的 3 个执行策略选项。
+- **实例文献验证**：以典型超长数据表文献 `DOC-PAP-0000-E284F0` 实测，成功导出自解释任务包目录、175 个条目、21 个浓缩数据表格，并成功生成 15,045 字符的表格总结专用 Prompt。
 
