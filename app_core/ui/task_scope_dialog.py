@@ -60,7 +60,7 @@ class TaskScopeDialog(QDialog):
         if self.task_type in ("step3_api", "step3_extract"):
             self.window_title = "⚡ AI 快速理解 · 范围与方式选择"
             self.header_title = "<b>第 ③ 步：AI 快速理解</b>"
-            self.header_desc = "支持依照模型调度策略全自动提炼，或无API网页版AI半自动模式批量打包。请选择处理文献范围与执行方式："
+            self.header_desc = "支持依照模型调度策略全自动提炼、无API网页版AI半自动模式，或本地 Agent / CLI 模式。请选择处理文献范围与执行方式："
             self.confirm_text = "▶ 开始执行 AI 快速理解"
             self.confirm_color = "#0d6efd"  # Primary blue
         elif self.task_type == "step3_semi":
@@ -72,13 +72,13 @@ class TaskScopeDialog(QDialog):
         elif self.task_type == "step4_audit":
             self.window_title = "🔍 AI 校对核查 · 范围与方式选择"
             self.header_title = "<b>第 ④ 步：AI 校对核查（审稿人核验与延拓审核）</b>"
-            self.header_desc = "对选中文献进行知识卡交叉审稿，核验真伪、审查原理可行性并顺路补齐或修正广义物理延拓。支持自动调度或网页端半自动："
+            self.header_desc = "对选中文献进行知识卡交叉审稿，核验真伪、审查原理可行性并顺路补齐或修正广义物理延拓。支持自动调度、网页端半自动或本地 Agent / CLI："
             self.confirm_text = "🔍 打开文献 AI 校对工作台"
             self.confirm_color = "#198754"
         elif self.task_type == "step5_deep":
             self.window_title = "✨ AI 深度归纳 · 范围与方式选择"
             self.header_title = "<b>第 ⑤ 步：AI 深度归纳（Master 宏观全景卡片）</b>"
-            self.header_desc = "综合各证据包深度凝练宏观知识全景，完成后文献状态将点亮金光。支持自动归纳或网页版半自动："
+            self.header_desc = "综合各证据包深度凝练宏观知识全景，完成后文献状态将点亮金光。支持自动归纳、网页版半自动，或本地 Agent / CLI 模式："
             self.confirm_text = "✨ 打开深度归纳工作台"
             self.confirm_color = "#0d6efd"
         else:
@@ -156,12 +156,15 @@ class TaskScopeDialog(QDialog):
         self.mode_btn_group = QButtonGroup(self)
         self.radio_mode_auto = QRadioButton("⚡ 依照模型策略自动处理 (按模型调度策略编排器设置自动运行)")
         self.radio_mode_semi = QRadioButton("📋 无API网页版AI半自动模式 (剪切板提问包，零 Token 消耗)")
+        self.radio_mode_agent = QRadioButton("💻 本地 Agent / CLI 模式 (Codex/Claude Code/Antigravity 专属任务包与命令行)")
         self.mode_btn_group.addButton(self.radio_mode_auto)
         self.mode_btn_group.addButton(self.radio_mode_semi)
+        self.mode_btn_group.addButton(self.radio_mode_agent)
         self.radio_mode_auto.setChecked(True)
         self.mode_btn_group.buttonToggled.connect(lambda *_: self._update_estimates())
         mode_layout.addWidget(self.radio_mode_auto)
         mode_layout.addWidget(self.radio_mode_semi)
+        mode_layout.addWidget(self.radio_mode_agent)
         layout.addWidget(mode_group)
 
         # Status & Estimate label
@@ -234,9 +237,11 @@ class TaskScopeDialog(QDialog):
             self._update_estimates()
 
     def get_execution_mode(self) -> str:
-        """Return 'semi_auto' for clipboard mode, 'auto' for strategy/API mode."""
+        """Return 'semi_auto' for clipboard mode, 'agent' for CLI/agent mode, 'auto' for strategy/API mode."""
         if hasattr(self, "radio_mode_semi") and self.radio_mode_semi.isChecked():
             return "semi_auto"
+        if hasattr(self, "radio_mode_agent") and self.radio_mode_agent.isChecked():
+            return "agent"
         return "auto"
 
     def _update_estimates(self) -> None:
@@ -245,6 +250,7 @@ class TaskScopeDialog(QDialog):
         target_ids = self.get_target_doc_ids()
         count = len(target_ids) if target_ids is not None else self.total_doc_count
         is_semi = hasattr(self, "radio_mode_semi") and self.radio_mode_semi.isChecked()
+        is_agent = hasattr(self, "radio_mode_agent") and self.radio_mode_agent.isChecked()
 
         if count == 0:
             self.status_label.setText("⚠️ 未选定任何文献。请选择文献范围或选择全库。")
@@ -261,6 +267,12 @@ class TaskScopeDialog(QDialog):
                     self.confirm_button.setText("📋 打开半自动工作台 (零Token)")
                 self.status_label.setText(
                     f"已选定目标：{count} 篇文献（按 Token 上限自动按篇分包，单包绝不混淆多篇文献。完全零 API Token 成本）。"
+                )
+            elif is_agent:
+                if hasattr(self, "confirm_button"):
+                    self.confirm_button.setText("💻 打开 Agent / CLI 工作台")
+                self.status_label.setText(
+                    f"已选定目标：{count} 篇文献（导出自解释 Agent 任务包与 items.json/tables/，供 Codex / CLI / Antigravity 处理与导入回复）。"
                 )
             else:
                 token_est = ""
@@ -282,6 +294,10 @@ class TaskScopeDialog(QDialog):
                 if hasattr(self, "confirm_button"):
                     self.confirm_button.setText("📋 打开校对工作台 (剪切板/导出)")
                 self.status_label.setText(f"已选定目标：{count} 篇文献（导出校对任务包并在网页端 AI 交叉审核，完全零 Token 成本）。")
+            elif is_agent:
+                if hasattr(self, "confirm_button"):
+                    self.confirm_button.setText("💻 打开 Agent / CLI 校对工作台")
+                self.status_label.setText(f"已选定目标：{count} 篇文献（通过本地 Agent / CLI 审计工具对知识卡进行审稿与核验）。")
             else:
                 if hasattr(self, "confirm_button"):
                     self.confirm_button.setText("🔍 依照策略自动校对核查")
@@ -291,6 +307,10 @@ class TaskScopeDialog(QDialog):
                 if hasattr(self, "confirm_button"):
                     self.confirm_button.setText("📋 打开深度归纳工作台 (网页版Prompt)")
                 self.status_label.setText(f"已选定目标：{count} 篇文献（可按篇切换复制宏观全景 Prompt 到网页端旗舰 AI 提炼）。")
+            elif is_agent:
+                if hasattr(self, "confirm_button"):
+                    self.confirm_button.setText("💻 打开 Agent / CLI 深度归纳")
+                self.status_label.setText(f"已选定目标：{count} 篇文献（通过 Codex 沙盒 Agent / MCP 工单执行跨卡深度归纳）。")
             else:
                 if hasattr(self, "confirm_button"):
                     self.confirm_button.setText("✨ 依照策略自动深度归纳")

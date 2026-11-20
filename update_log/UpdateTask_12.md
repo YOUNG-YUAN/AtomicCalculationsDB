@@ -280,6 +280,23 @@ workspace/agent_tasks/<DOC-ID>/
    - `AgentTaskPackager.submit_table_summary_result` 自动将回复解析为 `KnowledgeCardDraft`，标记 `category="DATA"`、`data_type="TABLE_SUMMARY"`；
    - 在底座与模型校验中扩展 `_CARD_TYPE_ALIASES` 兼容 `"DATA"`，安全映射到 L2 数据库 `CONC` 数值结论类型并生成唯一 ID，关联文献全景脉络。
 
+### 9.3 文献库顶层任务范围对话框 (`TaskScopeDialog`) 统一增加 Agent / CLI 选项
+- **顶栏入口无缝打通**：在文献库顶部的“⚡ ③ AI 快速理解”与“✨ ⑤ AI 深度归纳”按键，以及右键菜单唤起的 `TaskScopeDialog` 中：
+  - “选择执行方式”统一扩展为三大并行选项：
+    1. `⚡ 依照模型策略自动处理 (按模型调度策略编排器设置自动运行)`
+    2. `📋 无API网页版AI半自动模式 (剪切板提问包，零 Token 消耗)`
+    3. `💻 本地 Agent / CLI 模式 (Codex/Claude Code/Antigravity 专属任务包与命令行)`
+  - 勾选本地 Agent 模式后，状态栏与确认按键动态切换为 `💻 打开 Agent / CLI 工作台`；
+  - 确认后直接拉起 `AgentTaskDialog`（第 ③ 步）或 `DeepSynthesisDialog` 的 Codex 沙盒 Agent 标签页（第 ⑤ 步）。
+
+### 9.4 批量文献 Agent 任务包切换与导出支持 (`AgentTaskDialog`)
+- 当用户在文献库中勾选/选中多篇文献进入 Agent 任务台时，顶栏自动渲染“切换目标文献 (`QComboBox`)”与“📦 批量导出全部任务包”功能按键；
+- 允许用户在同一窗口内平滑切换不同文献，随时随地一键为选中的全部文献生成自解释任务目录，方便统一提供给本地 Agent 批量处理。
+
+### 9.5 修复缺陷
+- 修复在 `DocumentDetailDialog` 中关闭 Agent 任务工作台后调用不存在的 `_refresh_pipeline_stepper` 导致的 `AttributeError`（统一修正为调用现有的 `self._refresh_stepper()` 与 `self._refresh_related_cards()`）。
+- 详情页“⑤ AI 深度归纳”策略下拉框同步补齐 `💻 本地 Agent / CLI 模式` 选项。
+
 ---
 
 ## 10. 自动化测试与全量验收

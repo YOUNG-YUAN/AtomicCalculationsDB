@@ -150,17 +150,22 @@ class AgentTaskDialog(QDialog):
         db: Any,
         workspace: str | Path,
         pipeline: Any = None,
-        doc_id: str,
+        doc_id: str | list[str],
     ):
         super().__init__(parent)
         self.db = db
         self.workspace = Path(workspace)
         self.pipeline = pipeline
-        self.doc_id = str(doc_id or "").strip()
+        if isinstance(doc_id, (list, tuple)):
+            self.doc_ids = [str(d).strip() for d in doc_id if str(d).strip()]
+        else:
+            self.doc_ids = [str(doc_id).strip()] if str(doc_id).strip() else []
+        self.doc_id = self.doc_ids[0] if self.doc_ids else ""
         self.packager = AgentTaskPackager(self.db, self.workspace, pipeline=self.pipeline)
         self.current_agent_model = get_default_agent_model(getattr(self.pipeline, "config", None))
 
-        self.setWindowTitle(f"💻 本地 Agent / CLI 任务工作台 — {self.doc_id}")
+        title_suffix = f" (共 {len(self.doc_ids)} 篇)" if len(self.doc_ids) > 1 else ""
+        self.setWindowTitle(f"💻 本地 Agent / CLI 任务工作台 — {self.doc_id}{title_suffix}")
         self.resize(1000, 720)
         self.setMinimumSize(850, 600)
 
@@ -196,6 +201,31 @@ class AgentTaskDialog(QDialog):
 
         info_vbox = QVBoxLayout()
         info_vbox.setSpacing(4)
+
+        if len(self.doc_ids) > 1:
+            selector_row = QHBoxLayout()
+            lbl_sel = QLabel(f"切换目标文献 ({len(self.doc_ids)} 篇):")
+            lbl_sel.setStyleSheet("font-weight: bold; font-size: 12px; color: #1e293b;")
+            selector_row.addWidget(lbl_sel)
+
+            self.doc_combo = QComboBox()
+            self.doc_combo.setMinimumWidth(260)
+            for did in self.doc_ids:
+                d = self.db.get_document(did) if self.db else None
+                short_title = str(d.get("title") or "") if d else ""
+                if len(short_title) > 35:
+                    short_title = short_title[:32] + "..."
+                self.doc_combo.addItem(f"{did}  {short_title}", did)
+            self.doc_combo.currentIndexChanged.connect(self._on_doc_combo_changed)
+            selector_row.addWidget(self.doc_combo)
+
+            batch_export_btn = QPushButton("📦 批量导出全部任务包")
+            batch_export_btn.setToolTip("为选中的所有文献生成专属 Agent 任务目录")
+            batch_export_btn.clicked.connect(self._batch_export_all)
+            selector_row.addWidget(batch_export_btn)
+            selector_row.addStretch(1)
+            info_vbox.addLayout(selector_row)
+
         self.title_label = QLabel()
         self.title_label.setStyleSheet("font-size: 14px; font-weight: bold; color: #0f172a;")
         self.title_label.setWordWrap(True)
@@ -492,6 +522,39 @@ class AgentTaskDialog(QDialog):
 
         bar.addStretch(1)
         layout.addLayout(bar)
+
+    def _on_doc_combo_changed(self, idx: int) -> None:
+        if idx < 0 or not hasattr(self, "doc_combo"):
+            return
+        new_doc_id = str(self.doc_combo.currentData() or "").strip()
+        if new_doc_id and new_doc_id != self.doc_id:
+            self.doc_id = new_doc_id
+            self.task_dir = self.workspace / "agent_tasks" / self.doc_id
+            try:
+                if not self.task_dir.is_dir() or not (self.task_dir / "items.json").is_file():
+                    self.packager.export_task_bundle(self.doc_id)
+            except Exception as exc:
+                log.warning("Export task bundle warning: %s", exc)
+            self.path_edit.setText(str(self.task_dir.resolve()))
+            self.cli_edit.setText(f"python -m app_core agent execute {self.doc_id}")
+            title_suffix = f" (共 {len(self.doc_ids)} 篇)" if len(self.doc_ids) > 1 else ""
+            self.setWindowTitle(f"💻 本地 Agent / CLI 任务工作台 — {self.doc_id}{title_suffix}")
+            self._refresh_all()
+
+    def _batch_export_all(self) -> None:
+        exported = 0
+        errors = []
+        for did in self.doc_ids:
+            try:
+                self.packager.export_task_bundle(did)
+                exported += 1
+            except Exception as exc:
+                errors.append(f"{did}: {exc}")
+        msg = f"已成功为 {exported}/{len(self.doc_ids)} 篇文献生成 Agent 任务包！"
+        if errors:
+            msg += "\n\n部分失败:\n" + "\n".join(errors[:5])
+        QMessageBox.information(self, "批量导出完成", msg)
+        self._refresh_all()
 
     # ---------------------------------------------------------------- Data Loading
     def _refresh_all(self) -> None:

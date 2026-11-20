@@ -739,7 +739,7 @@ def test_document_detail_dialog_strategy_bar_v3(tmp_path, qapp):
     assert hasattr(dlg, "fast_mode_combo")
     assert hasattr(dlg, "deep_mode_combo")
     assert dlg.fast_mode_combo.count() >= 2
-    assert dlg.deep_mode_combo.count() == 2
+    assert dlg.deep_mode_combo.count() >= 2
 
     # Check labels and values
     assert dlg.fast_mode_combo.itemData(0) == "auto"

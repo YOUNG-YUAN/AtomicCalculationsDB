@@ -1223,9 +1223,10 @@ class DocumentDetailDialog(QDialog):
         lbl_deep.setStyleSheet("color: #334155; font-size: 11px;")
         self.deep_mode_combo = QComboBox()
         self.deep_mode_combo.setObjectName("Pill")
-        self.deep_mode_combo.addItem("🤖 模型调度策略 (API/Agent)", "auto")
+        self.deep_mode_combo.addItem("🤖 模型调度策略 (API 自动)", "auto")
         self.deep_mode_combo.addItem("📋 网页版 AI 手动 (零 Token)", "manual")
-        self.deep_mode_combo.setToolTip("选择第 ⑤ 步「AI 深度归纳」执行方式：走后台 Agent/大模型推理，或复制深度归纳 Prompt 由网页版大模型生成 Master 知识卡")
+        self.deep_mode_combo.addItem("💻 本地 Agent / CLI 模式", "agent")
+        self.deep_mode_combo.setToolTip("选择第 ⑤ 步「AI 深度归纳」执行方式：走后台大模型推理、复制深度归纳 Prompt 由网页版大模型生成 Master 知识卡，或通过本地 Agent / CLI / MCP 工单执行")
         strat_layout.addWidget(lbl_deep)
         strat_layout.addWidget(self.deep_mode_combo)
 
@@ -1577,7 +1578,7 @@ class DocumentDetailDialog(QDialog):
         dialog.exec()
         self.doc = self.db.get_document(doc_id) or self.doc
         self._refresh_related_cards()
-        self._refresh_pipeline_stepper()
+        self._refresh_stepper()
 
     def _run_reprocess(self, mode: str) -> None:
         if self.reprocess_manager is None:

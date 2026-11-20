@@ -898,7 +898,7 @@ def test_agent_task_dialog_ui(tmp_path, qapp):
     assert dialog.path_edit.text() != ""
     assert "agent execute" in dialog.cli_edit.text()
 
-    # Verify DocumentDetailDialog has "agent" option in fast_mode_combo
+    # Verify DocumentDetailDialog has "agent" option in fast_mode_combo & deep_mode_combo
     detail_dlg = DocumentDetailDialog(
         db=db,
         workspace=workspace,
@@ -911,6 +911,50 @@ def test_agent_task_dialog_ui(tmp_path, qapp):
     assert combo.itemData(1) == "manual"
     assert combo.itemData(2) == "agent"
     assert "Agent" in combo.itemText(2)
+
+    deep_combo = detail_dlg.deep_mode_combo
+    assert deep_combo.count() == 3
+    assert deep_combo.itemData(0) == "auto"
+    assert deep_combo.itemData(1) == "manual"
+    assert deep_combo.itemData(2) == "agent"
+
+    # Verify _open_agent_workbench doesn't raise AttributeError for _refresh_pipeline_stepper
+    with patch("ui.agent_task_dialog.AgentTaskDialog.exec", return_value=QDialog.Accepted):
+        detail_dlg._open_agent_workbench()
+
+    # Verify TaskScopeDialog for Step 3 & Step 5 has agent mode
+    from ui.task_scope_dialog import TaskScopeDialog
+    scope_step3 = TaskScopeDialog(
+        db=db,
+        task_type="step3_api",
+        selected_doc_ids=[doc_id],
+    )
+    assert hasattr(scope_step3, "radio_mode_agent")
+    scope_step3.radio_mode_agent.setChecked(True)
+    assert scope_step3.get_execution_mode() == "agent"
+    assert "Agent" in scope_step3.confirm_button.text()
+
+    scope_step5 = TaskScopeDialog(
+        db=db,
+        task_type="step5_deep",
+        selected_doc_ids=[doc_id],
+    )
+    assert hasattr(scope_step5, "radio_mode_agent")
+    scope_step5.radio_mode_agent.setChecked(True)
+    assert scope_step5.get_execution_mode() == "agent"
+    assert "Agent" in scope_step5.confirm_button.text()
+
+    # Verify multi-doc AgentTaskDialog support
+    doc_id_2 = "DOC-PAP-2024-B00002"
+    multi_dlg = AgentTaskDialog(
+        db=db,
+        workspace=workspace,
+        pipeline=pipeline,
+        doc_id=[doc_id, doc_id_2],
+    )
+    assert hasattr(multi_dlg, "doc_combo")
+    assert multi_dlg.doc_combo.count() == 2
+
 
 
 

@@ -1110,6 +1110,19 @@ class LibraryView(QWidget):
                 semi_dlg.exec()
                 self.refresh_visible_pipeline_statuses(target_ids)
                 self.data_changed.emit()
+            elif mode == "agent":
+                from ui.agent_task_dialog import AgentTaskDialog
+
+                agent_dlg = AgentTaskDialog(
+                    parent=self.window() or self,
+                    db=self.db,
+                    workspace=self.workspace,
+                    pipeline=self.pipeline,
+                    doc_id=target_ids,
+                )
+                agent_dlg.exec()
+                self.refresh_visible_pipeline_statuses(target_ids)
+                self.data_changed.emit()
             else:
                 self._run_reprocess("incremental", target_doc_ids=target_ids, skip_confirmation=True)
 
@@ -1145,8 +1158,10 @@ class LibraryView(QWidget):
                 parent=self.window() or self,
                 pipeline=self.pipeline,
             )
-            if mode == "auto" and hasattr(deep_dlg, "tabs"):
-                deep_dlg.tabs.setCurrentIndex(1)
+            if mode == "semi_auto" and hasattr(deep_dlg, "tabs"):
+                deep_dlg.tabs.setCurrentIndex(0)  # Tab 0: 网页版 AI (零 Token·推荐)
+            elif (mode in ("auto", "agent")) and hasattr(deep_dlg, "tabs"):
+                deep_dlg.tabs.setCurrentIndex(1)  # Tab 1: Codex 沙盒 Agent (带 CLI/MCP 工单)
             deep_dlg.synthesis_completed.connect(lambda d, k: self.refresh_visible_pipeline_statuses([d] if d else doc_ids))
             deep_dlg.exec()
             self.refresh_visible_pipeline_statuses(doc_ids)
@@ -1315,33 +1330,50 @@ class LibraryView(QWidget):
             self._run_reprocess("force", target_doc_ids=[doc_id], skip_confirmation=True)
 
         elif step == 3:
-            choice = QMessageBox.question(
-                self,
-                "第 ③ 步：AI 快速提取",
-                f"请选择 AI 快速提取的执行方式：\n\n"
-                f"【Yes】：打开网页版 AI 半自动任务台（零 Token 消耗）\n"
-                f"【No】：直接调用后台 API 全自动提取（消耗 Token）",
-                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
-                QMessageBox.Yes,
+            from ui.task_scope_dialog import TaskScopeDialog
+
+            dialog = TaskScopeDialog(
+                db=self.db,
+                task_type="step3_api",
+                selected_doc_ids=[doc_id],
+                total_doc_count=self.db.count_documents() if self.db else 0,
+                reprocess_manager=self.reprocess_manager,
+                parent=self.window() or self,
             )
-            if choice == QMessageBox.Cancel:
-                return
-            if choice == QMessageBox.Yes:
-                dialog = SemiAutoBatchDialog(
-                    self.db,
-                    self.workspace,
-                    self.pipeline,
-                    [doc_id],
-                    mode="force",
-                    config=self.config,
-                    parent=self,
-                )
-                dialog.changed.connect(lambda: self.refresh_visible_pipeline_statuses([doc_id]))
-                dialog.exec()
-                self.refresh_visible_pipeline_statuses([doc_id])
-                self.data_changed.emit()
-            else:
-                self._run_reprocess("incremental")
+            if dialog.exec() == QDialog.Accepted:
+                target_ids = dialog.get_target_doc_ids() or [doc_id]
+                mode = dialog.get_execution_mode()
+                if mode == "semi_auto":
+                    from ui.semi_auto_dialog import SemiAutoBatchDialog
+
+                    semi_dlg = SemiAutoBatchDialog(
+                        self.db,
+                        self.workspace,
+                        self.pipeline,
+                        target_ids,
+                        mode="force",
+                        config=self.config,
+                        parent=self,
+                    )
+                    semi_dlg.changed.connect(lambda: self.refresh_visible_pipeline_statuses(target_ids))
+                    semi_dlg.exec()
+                    self.refresh_visible_pipeline_statuses(target_ids)
+                    self.data_changed.emit()
+                elif mode == "agent":
+                    from ui.agent_task_dialog import AgentTaskDialog
+
+                    agent_dlg = AgentTaskDialog(
+                        parent=self.window() or self,
+                        db=self.db,
+                        workspace=self.workspace,
+                        pipeline=self.pipeline,
+                        doc_id=target_ids,
+                    )
+                    agent_dlg.exec()
+                    self.refresh_visible_pipeline_statuses(target_ids)
+                    self.data_changed.emit()
+                else:
+                    self._run_reprocess("incremental", target_doc_ids=target_ids, skip_confirmation=True)
 
         elif step == 4:
             cards = self.db.cards_for_document(doc_id)
