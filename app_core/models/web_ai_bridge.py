@@ -1024,6 +1024,9 @@ class ClipboardBatchService:
         packets: list[ClipboardPacket] = []
         for batch in batches:
             blocks = []
+            batch_tables: list[str] = []
+            seen_tables: set[str] = set()
+
             for item in batch.items:
                 metadata = item.metadata or {}
                 doc_id = str(metadata.get("doc_id") or "")
@@ -1034,22 +1037,63 @@ class ClipboardBatchService:
                     if title:
                         header += f" · {title}"
                     header += "\n"
+
+                item_raw_text = item.text.strip()
+                item_bundle = metadata.get("bundle") or bundles.get(item.item_id)
+                t_md = ""
+                if isinstance(item_bundle, dict):
+                    t_md = str(item_bundle.get("table_markdown") or "").strip()
+                elif hasattr(item_bundle, "table_markdown"):
+                    t_md = str(getattr(item_bundle, "table_markdown") or "").strip()
+
+                if t_md:
+                    if t_md not in seen_tables:
+                        seen_tables.add(t_md)
+                        batch_tables.append(t_md)
+                    table_idx = batch_tables.index(t_md) + 1
+                    if "## 表格数据 (压缩脱水版)" in item_raw_text:
+                        item_raw_text = re.sub(
+                            r"## 表格数据 \(压缩脱水版\)\n.*",
+                            f"## 表格调用说明\n（本条目调用数据表，详见文末【参考表格附件】[表格附件 {table_idx}]）",
+                            item_raw_text,
+                            flags=re.S,
+                        )
+                    else:
+                        item_raw_text += f"\n\n## 表格调用说明\n（本条目调用数据表，详见文末【参考表格附件】[表格附件 {table_idx}]）"
+
                 blocks.append(
-                    f"### ITEM {item.item_id}\n{header}{item.text.strip()}"
+                    f"### ITEM {item.item_id}\n{header}{item_raw_text}"
                 )
-            prompt = "\n\n".join(
-                part
-                for part in (
-                    system_prompt.strip(),
-                    global_premise.strip(),
-                    "【待处理片段】",
-                    "\n\n".join(blocks),
-                    "【输出要求】",
-                    "请输出严格 JSON：{\"items\":[{\"item_id\":\"...\",\"result\":{...ExtractionResult...}}]}。"
-                    "特别提醒：JSON 内部的所有 LaTeX 反斜杠必须写为双反斜杠（如 \\\\frac, \\\\langle, \\\\beta 而非单个 \\），只输出 JSON，不要 Markdown 解释。",
-                )
-                if part
-            )
+
+            # 1. 任务与输出规范块（格式与输出声明放一块）
+            spec_parts = []
+            if system_prompt.strip():
+                spec_parts.append(system_prompt.strip())
+            if global_premise.strip():
+                spec_parts.append(global_premise.strip())
+            spec_parts.extend([
+                "【任务与输出规范】",
+                "请仔细阅读后续【具体提问条目】" + ("及文末【参考表格附件】" if batch_tables else "") + "，提炼原子物理计算数据与模型信息。",
+                "【输出要求】",
+                "请输出严格 JSON：{\"items\":[{\"item_id\":\"...\",\"result\":{...ExtractionResult...}}]}。",
+                "特别提醒：JSON 内部的所有 LaTeX 反斜杠必须写为双反斜杠（如 \\\\frac, \\\\langle, \\\\beta 而非单个 \\），只输出纯 JSON，不要 Markdown 解释。",
+            ])
+            spec_section = "\n\n".join(spec_parts)
+
+            # 2. 具体提问条目块（具体提问条目放另一块）
+            items_section = "【具体提问条目】\n\n" + "\n\n".join(blocks)
+
+            prompt_sections = [spec_section, items_section]
+
+            # 3. 参考表格附件块（如果还有表格，表格再放另一块）
+            if batch_tables:
+                table_blocks = []
+                for idx, table_content in enumerate(batch_tables, 1):
+                    table_blocks.append(f"### [表格附件 {idx}] (已采用骨架压缩脱水)\n{table_content}")
+                tables_section = "【参考表格附件 (按需调用)】\n\n" + "\n\n---\n\n".join(table_blocks)
+                prompt_sections.append(tables_section)
+
+            prompt = "\n\n".join(prompt_sections)
             packets.append(
                 ClipboardPacket(
                     batch=batch,

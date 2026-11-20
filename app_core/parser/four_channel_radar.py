@@ -94,6 +94,14 @@ _MANUAL_SCRIPT_RE = re.compile(
     r"<<\s*EOF|\{2s,\s*2p\}|SD\s+excitations|input\s+stream|standard\s+input",
     re.I,
 )
+_NON_CONCLUSION_SECTION_RE = re.compile(
+    r"\b(explanation of tables?|references?|bibliography|contents?|table of contents?|acknowledg(?:e)?ments?)\b",
+    re.I,
+)
+_TABLE_CONTINUATION_OR_HEADER_RE = re.compile(
+    r"^(?:table|tab\.|figure|fig\.)\s*[0-9ivxlc.]*(?:\s*\(cont[^\)]*\))?\.?\s*$",
+    re.I,
+)
 
 
 @dataclass
@@ -245,6 +253,11 @@ class FourChannelRadar:
         for section in document.sections:
             if manual and is_manual_skip_section(section.title):
                 continue
+            if not manual and (
+                _NON_CONCLUSION_SECTION_RE.search(section.title)
+                or _NON_CONCLUSION_SECTION_RE.search(section.path)
+            ):
+                continue
             self._channel_a(section, result, manual=manual)
             self._channel_b(section, result)
             self._channel_c(section, result)
@@ -254,6 +267,11 @@ class FourChannelRadar:
 
     # -------------------------------------------------------------- channel A
     def _channel_a(self, section: Section, result: RadarResult, *, manual: bool = False) -> None:
+        if not manual and (
+            _NON_CONCLUSION_SECTION_RE.search(section.title)
+            or _NON_CONCLUSION_SECTION_RE.search(section.path)
+        ):
+            return
         for paragraph_index, paragraph in enumerate(section.paragraphs):
             if paragraph.startswith(("```", "|", "$$")):
                 continue
@@ -262,11 +280,25 @@ class FourChannelRadar:
                 self._manual_hit(section, paragraph_index, paragraph, sentences, result)
             limit = len(sentences) if manual else self.max_sentences_per_section
             for idx, sentence in enumerate(sentences[:limit]):
+                s_strip = sentence.strip()
+                if not s_strip:
+                    continue
+                # Skip OCR bounding box JSON lines
+                if "'bbox'" in s_strip or '{"bbox' in s_strip:
+                    continue
+                # Skip bare table continuation markers or bare figure headers
+                if _TABLE_CONTINUATION_OR_HEADER_RE.match(s_strip):
+                    continue
                 is_table_ref = bool(_TABLE_REF_RE.search(sentence))
                 is_cognitive = bool(_COGNITIVE_RE.search(sentence))
                 is_contrast = bool(_CONTRAST_RE.search(sentence))
                 if not (is_table_ref or is_cognitive or is_contrast):
                     continue
+                # If only matching table_ref without cognitive/contrast cues, require a meaningful sentence
+                if is_table_ref and not (is_cognitive or is_contrast):
+                    words = re.findall(r"[A-Za-z0-9_-]+", s_strip)
+                    if len(words) < 4 or len(s_strip) < 20:
+                        continue
                 window = sentence
                 if is_table_ref and idx + 2 < len(sentences):
                     window = " ".join(sentences[idx : idx + 3])
@@ -377,40 +409,36 @@ class FourChannelRadar:
             header = self._table_header(markdown)
             probe = f"{caption} {header}"
             numeric = _numeric_ratio(markdown)
+            is_non_conclusion_sec = bool(
+                _NON_CONCLUSION_SECTION_RE.search(section.title)
+                or _NON_CONCLUSION_SECTION_RE.search(section.path)
+            )
+            is_continuation = "(cont" in str(caption).lower()
             if rows >= 50 and numeric >= 0.55:
                 kind = "BULK_DATA_TABLE"
-            elif rows < 50 and _STRATEGY_TABLE_RE.search(probe):
+            elif rows < 50 and _STRATEGY_TABLE_RE.search(probe) and not is_non_conclusion_sec and not is_continuation:
                 kind = "STRATEGY_TABLE"
             else:
                 kind = "DATA_TABLE"
-            if kind == "BULK_DATA_TABLE":
-                result.add(
-                    RadarHit(
-                        channel=kind,
-                        text=f"{caption}\n{markdown}",
-                        section_path=section.path,
-                        paragraph_index=paragraph_index,
-                        page_num=page_num,
-                        caption=caption,
-                        table_markdown=markdown,
-                        rows=rows,
-                        meta={"numeric_ratio": numeric, "kept_for_llm": False},
-                    )
+            kept = not (
+                kind == "BULK_DATA_TABLE"
+                or is_non_conclusion_sec
+                or is_continuation
+                or (rows >= 30 and numeric >= 0.6)
+            )
+            result.add(
+                RadarHit(
+                    channel=kind,
+                    text=f"{caption}\n{markdown}",
+                    section_path=section.path,
+                    paragraph_index=paragraph_index,
+                    page_num=page_num,
+                    caption=caption,
+                    table_markdown=markdown,
+                    rows=rows,
+                    meta={"numeric_ratio": numeric, "kept_for_llm": kept},
                 )
-            else:
-                result.add(
-                    RadarHit(
-                        channel=kind,
-                        text=f"{caption}\n{markdown}",
-                        section_path=section.path,
-                        paragraph_index=paragraph_index,
-                        page_num=page_num,
-                        caption=caption,
-                        table_markdown=markdown,
-                        rows=rows,
-                        meta={"numeric_ratio": numeric, "kept_for_llm": True},
-                    )
-                )
+            )
 
     @staticmethod
     def _table_header(markdown: str) -> str:

@@ -317,3 +317,189 @@ def test_agent_model_last_used_persistence(qapp, tmp_path):
     # 6. Reset to GPT-6.2 Sol Ultra
     save_default_agent_model("GPT-6.2 Sol Ultra", cfg)
     assert get_default_agent_model(cfg) == "GPT-6.2 Sol Ultra"
+
+
+def test_skeletonize_table_markdown():
+    from parser.table_compressor import skeletonize_table_markdown
+
+    # 1. Short table remains intact
+    short_table = (
+        "| State | Energy (cm-1) |\n"
+        "| --- | --- |\n"
+        "| 2p5 3s 3P0 | 12345.6 |\n"
+        "| 2p5 3s 3P1 | 12567.8 |"
+    )
+    assert skeletonize_table_markdown(short_table).strip() == short_table
+
+    # 2. Giant 50-row table is skeletonized to top 5 rows + omission marker
+    rows = [f"| 2p5 3d {i} | {10000 + i * 100:.1f} |" for i in range(50)]
+    giant_table = (
+        "| State | Energy (cm-1) |\n"
+        "| --- | --- |\n"
+        + "\n".join(rows)
+    )
+    skeleton = skeletonize_table_markdown(giant_table, max_sample_rows=5, caption="Table 1. Energy levels")
+    assert "Table 1. Energy levels" in skeleton
+    assert "2p5 3d 0" in skeleton
+    assert "2p5 3d 4" in skeleton
+    assert "2p5 3d 10" not in skeleton
+    assert "此处省略 45 行常规数值" in skeleton
+
+
+def test_table_on_demand_and_pseudo_conclusion_filtering():
+    from parser.pdf_to_markdown import ParsedDocument, Section, TableBlock
+    from parser.four_channel_radar import FourChannelRadar
+    from parser.context_bundler import ContextBundler
+
+    # Construct a synthetic document:
+    # Section 1 has theoretical description without table reference
+    # Section 2 has a conclusion that refers to Table 1
+    # Section 3 is "Explanation of Tables" with continuation markers that should be skipped
+    sec1 = Section(
+        title="1. Theoretical Method",
+        level=1,
+        path="Paper > 1. Theoretical Method",
+        page_start=1,
+        page_end=2,
+        paragraphs=[
+            "The relativistic Dirac-Coulomb Hamiltonian is used to generate wavefunctions.",
+            "We found that core-valence correlation contributes significantly to the excitation energy.",
+        ],
+    )
+    # A 100-row table in Section 2
+    table1_rows = [f"| Level {i} | {20000 + i * 50} |" for i in range(100)]
+    table1_md = "| Level | Energy |\n| --- | --- |\n" + "\n".join(table1_rows)
+    sec2 = Section(
+        title="2. Results and Discussion",
+        level=1,
+        path="Paper > 2. Results and Discussion",
+        page_start=3,
+        page_end=4,
+        paragraphs=[
+            "As demonstrated in Table 1, the calculated fine-structure intervals agree with experiment within 0.1%.",
+        ],
+        tables=[
+            TableBlock(
+                block_id="tbl-1",
+                caption="Table 1. Energy levels and fine-structure splittings.",
+                markdown=table1_md,
+                rows=100,
+            )
+        ],
+    )
+    sec3_appendix = Section(
+        title="Explanation of Tables",
+        level=1,
+        path="Paper > Explanation of Tables",
+        page_start=5,
+        page_end=50,
+        paragraphs=[
+            "{'bbox': [10, 20, 30, 40], 'content': 'Table 1 Energy levels.'}",
+            "Table 1 (continued)",
+            "Table 2 (continued)",
+        ],
+        tables=[
+            TableBlock(
+                block_id="tbl-1-cont",
+                caption="Table 1 (continued)",
+                markdown=table1_md,
+                rows=100,
+            )
+        ],
+    )
+
+    doc = ParsedDocument(
+        title="Spectroscopic Data for Ne-like Ions",
+        sections=[sec1, sec2, sec3_appendix],
+        page_count=50,
+        doc_id="DOC-TEST-0001",
+    )
+
+    radar = FourChannelRadar().scan(doc)
+    bundler = ContextBundler()
+    bundles = bundler.build(doc, radar, doc_id=doc.doc_id)
+
+    # 1. Non-conclusion section "Explanation of Tables" and bare continuation markers produced 0 bundles!
+    sec_names = [b.section_path for b in bundles]
+    assert not any("Explanation of Tables" in s for s in sec_names)
+
+    # 2. Table-on-Demand: Section 1 items did NOT reference any table -> table_markdown is empty
+    sec1_bundles = [b for b in bundles if "1. Theoretical Method" in b.section_path]
+    assert len(sec1_bundles) >= 1
+    for b in sec1_bundles:
+        assert b.table_markdown == ""
+
+    # 3. Section 2 referenced Table 1 -> table_markdown is attached and skeletonized (not 100 rows!)
+    sec2_bundles = [b for b in bundles if "2. Results and Discussion" in b.section_path]
+    assert len(sec2_bundles) >= 1
+    assert sec2_bundles[0].table_markdown != ""
+    assert "Table 1" in sec2_bundles[0].table_markdown
+    assert "此处省略" in sec2_bundles[0].table_markdown
+    assert "Level 99" not in sec2_bundles[0].table_markdown
+
+
+def test_restructured_question_packets():
+    from parser.context_bundler import ContextBundle
+    from parser.batch_packer import DistilledItem
+    from models.endpoint_pool import EndpointNode
+    from models.web_ai_bridge import ClipboardBatchService
+
+    b1 = ContextBundle(
+        doc_id="DOC-01",
+        section_path="1. Methods",
+        focal_window_markdown="Dirac-Coulomb Hamiltonian formulation.",
+        focal_sentence="Hamiltonian formulation.",
+        table_markdown="",  # No table called
+    )
+    b2 = ContextBundle(
+        doc_id="DOC-01",
+        section_path="2. Results",
+        focal_window_markdown="As shown in Table 1, agreement is excellent.",
+        focal_sentence="Agreement is excellent.",
+        table_markdown="| Level | Energy |\n| --- | --- |\n| 1 | 100 |\n| 2 | 200 |\n",
+    )
+
+    items = [
+        DistilledItem(
+            item_id="item-1",
+            text=b1.prompt_markdown(),
+            metadata={"doc_id": "DOC-01", "bundle": b1.model_dump(mode="json")},
+        ),
+        DistilledItem(
+            item_id="item-2",
+            text=b2.prompt_markdown(),
+            metadata={"doc_id": "DOC-01", "bundle": b2.model_dump(mode="json")},
+        ),
+    ]
+
+    node = EndpointNode(
+        node_id="test-node",
+        name="Test Node",
+        node_type="OPENAI_COMPATIBLE_API",
+        capabilities=["TEXT_LLM"],
+        max_input_tokens=22000,
+        max_output_tokens=8000,
+    )
+
+    service = ClipboardBatchService()
+    packets = service.build_packets(items, node, system_prompt="SYSTEM PROMPT INSTRUCTION")
+    assert len(packets) == 1
+    prompt = packets[0].prompt
+
+    # Verify 3-part restructured prompt:
+    # 1. Format and output declaration block at top
+    assert "【任务与输出规范】" in prompt
+    assert "SYSTEM PROMPT INSTRUCTION" in prompt
+    assert "【输出要求】" in prompt
+    assert "LaTeX 反斜杠必须写为双反斜杠" in prompt
+
+    # 2. Specific question items block
+    assert "【具体提问条目】" in prompt
+    assert "### ITEM item-1" in prompt
+    assert "### ITEM item-2" in prompt
+
+    # 3. On-demand table attachments block at bottom
+    assert "【参考表格附件 (按需调用)】" in prompt
+    assert "[表格附件 1]" in prompt
+    assert "| Level | Energy |" in prompt
+

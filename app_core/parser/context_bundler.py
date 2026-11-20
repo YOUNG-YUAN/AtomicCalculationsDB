@@ -23,7 +23,7 @@ from parser.four_channel_radar import RadarHit, RadarResult
 from parser.html_table import sanitize_markdown_table_text
 from parser.pdf_to_markdown import ParsedDocument, Section
 from parser.preamble_extractor import extract_document_preamble
-from parser.table_compressor import compress_markdown_table
+from parser.table_compressor import compress_markdown_table, skeletonize_table_markdown
 
 _MODEL_REF_RE = re.compile(
     r"\b(Model|Set|Scheme|Case|Approach|Method)\s+([A-Z][A-Za-z0-9-]*)\b"
@@ -91,8 +91,23 @@ class ContextBundler:
         if manual and max_bundles == 200:
             max_bundles = 2000
         preamble = extract_document_preamble(document)
+
+        tables_by_num: dict[str, Any] = {}
+        for sec in document.sections:
+            for t in sec.tables:
+                cap = t.caption
+                if isinstance(cap, dict):
+                    cap = cap.get("content", "")
+                m = re.search(r"\b(?:Table|TABLE|Tab\.|表)\s*([0-9IVXLC]+)", str(cap or ""), re.I)
+                if m:
+                    tnum = m.group(1).upper()
+                    if tnum not in tables_by_num:
+                        tables_by_num[tnum] = t
+
         grouped: dict[tuple[str, int], list[RadarHit]] = {}
         for hit in radar.hits:
+            if hit.meta.get("kept_for_llm") is False or hit.channel == "BULK_DATA_TABLE":
+                continue
             key = (hit.section_path, hit.paragraph_index)
             grouped.setdefault(key, []).append(hit)
 
@@ -133,6 +148,29 @@ class ContextBundler:
                 bitmask |= item.tags_bitmask
             channels = sorted({item.channel for item in hits})
             definitions = self._backtrace(document, section, paragraph_index, paragraph)
+
+            # Table-on-Demand (按需调用):
+            # Check whether focal sentence or paragraph explicitly calls any table
+            text_for_table_check = f"{focal_sentence} {paragraph}"
+            found_refs = _TABLE_REF_RE.findall(text_for_table_check)
+            referenced_tables = []
+            seen_refs = set()
+            for ref_match in found_refs:
+                num = ref_match[1].upper() if isinstance(ref_match, tuple) else str(ref_match).upper()
+                if num in tables_by_num and num not in seen_refs:
+                    seen_refs.add(num)
+                    referenced_tables.append(tables_by_num[num])
+
+            final_table_md = ""
+            if referenced_tables:
+                final_table_md = "\n\n".join(
+                    skeletonize_table_markdown(t.markdown, caption=str(t.caption or ""))
+                    for t in referenced_tables
+                    if t.markdown
+                )
+            elif hit.table_markdown and hit.meta.get("kept_for_llm") is not False:
+                final_table_md = skeletonize_table_markdown(hit.table_markdown, caption=hit.caption)
+
             bundles.append(
                 ContextBundle(
                     doc_id=doc_id or document.doc_id or "",
@@ -145,7 +183,7 @@ class ContextBundler:
                     preliminary_tags_bitmask=bitmask,
                     focal_sentence=focal_sentence,
                     page_num=hit.page_num or section.page_start,
-                    table_markdown=compress_markdown_table(hit.table_markdown) if hit.table_markdown else "",
+                    table_markdown=final_table_md,
                     formula_latex=hit.meta.get("formula", "") if hit.channel == "FORMULA" else "",
                     code_snippet=hit.meta.get("code", "") if hit.channel == "CODE" else "",
                     locator={

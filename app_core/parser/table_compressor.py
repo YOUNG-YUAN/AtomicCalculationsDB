@@ -177,3 +177,70 @@ def compress_markdown_table(table_markdown: str) -> str:
         reconstructed_lines.extend(trailing_lines)
 
     return "\n".join(reconstructed_lines)
+
+
+def skeletonize_table_markdown(
+    table_markdown: str,
+    max_sample_rows: int = 5,
+    *,
+    caption: str = "",
+) -> str:
+    """Compress large markdown tables into a compact skeleton: header + top sample rows + footnotes."""
+    if not table_markdown or "|" not in table_markdown:
+        return table_markdown
+
+    cleaned = compress_markdown_table(table_markdown)
+    lines = cleaned.strip().splitlines()
+    table_lines: list[str] = []
+    leading: list[str] = []
+    trailing: list[str] = []
+    in_table = False
+    finished = False
+
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("|"):
+            if not in_table and not finished:
+                in_table = True
+            if in_table:
+                table_lines.append(stripped)
+        else:
+            if in_table:
+                in_table = False
+                finished = True
+            if not in_table and not finished:
+                leading.append(line)
+            else:
+                trailing.append(line)
+
+    if len(table_lines) <= max_sample_rows + 2:
+        return cleaned
+
+    header = table_lines[0]
+    sep = table_lines[1]
+    samples = table_lines[2 : 2 + max_sample_rows]
+    omitted = len(table_lines) - 2 - max_sample_rows
+
+    res: list[str] = []
+    if caption and not any(caption in l for l in leading):
+        res.append(f"**{caption}**\n")
+    if leading:
+        res.extend(leading)
+    res.append(header)
+    res.append(sep)
+    res.extend(samples)
+    col_count = len([c for c in header.split("|") if c.strip()]) or 3
+    omission_cells = ["..."] * col_count
+    omission_cells[min(1, col_count - 1)] = f"(此处省略 {omitted} 行常规数值，保留表头与注释供物理模型与精度分析)"
+    res.append("| " + " | ".join(omission_cells) + " |")
+    if trailing:
+        res.extend(trailing)
+
+    return "\n".join(res)
+
+
+__all__ = [
+    "compress_markdown_table",
+    "skeletonize_table_markdown",
+]
+
